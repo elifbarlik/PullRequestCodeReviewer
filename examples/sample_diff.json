@@ -1,0 +1,17 @@
+{
+  "file": "app/main.py",
+  "changes": [
+    {
+      "line": 10,
+      "old": "print('Hello World')",
+      "new": "print('Hello FastAPI World')",
+      "description": "Update greeting message"
+    },
+    {
+      "line": 15,
+      "old": "def old_function():\n    pass",
+      "new": "def new_function():\n    print('New function logic')",
+      "description": "Replace old_function with new_function"
+    }
+  ]
+}
