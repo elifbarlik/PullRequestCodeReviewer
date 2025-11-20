@@ -3,18 +3,25 @@ Prompt şablonları ve LLM ile iletişim için gerekli yapılar.
 Her prompt, bir diff'i analiz etmek için kullanılacak sorular içerir.
 """
 
+# =====================================================
+# 1. PROMPT ŞABLONLARı (Templates)
+# =====================================================
+
 SHORT_SUMMARY = """
-Aşağıdaki kod değişikliğini (diff) analiz et ve JSON formatında cevap ver.
+Aşağıdaki kod değişikliğini (diff) analiz et.
 
 Diff:
 {diff_text}
 
-Lütfen SADECE şu JSON formatında cevap ver (başka metin yazma):
+SADECE bu JSON'ı döndür, başka hiçbir metin yazma:
 {{
-    "summary": "Bu değişiklik ne yapıyor? 1-2 cümle ile kısa açıkla",
-    "severity": "low | medium | high",
-    "type": "feature | bugfix | refactor | test | other"
+    "summary": "1-2 cümle açıklama",
+    "severity": "low",
+    "type": "bugfix"
 }}
+
+Örnek cevap:
+{{"summary": "None kontrolü eklendi", "severity": "medium", "type": "bugfix"}}
 """
 
 BUG_DETECTION = """
@@ -82,7 +89,9 @@ Lütfen SADECE şu JSON formatında cevap ver (başka metin yazma):
 }}
 """
 
-# BEKLENEN JSON ŞEMASI (Expected Output Schema)
+# =====================================================
+# 2. BEKLENEN JSON ŞEMASI (Expected Output Schema)
+# =====================================================
 
 """
 Her LLM çağrısından dönecek JSON'ın yapısı şu şekildedir:
@@ -130,8 +139,9 @@ PERFORMANCE_REVIEW dönüş örneği:
 }
 """
 
-
-# PROMPT PARAMETRE TANIMA (Parameter Definitions)
+# =====================================================
+# 3. PROMPT PARAMETRE TANIMA (Parameter Definitions)
+# =====================================================
 
 PROMPT_CONFIG = {
     "SHORT_SUMMARY": {
@@ -160,8 +170,9 @@ PROMPT_CONFIG = {
     },
 }
 
-
-# YARDIMCI FONKSİYONLAR
+# =====================================================
+# 4. YARDIMCI FONKSİYONLAR
+# =====================================================
 
 def get_prompt(prompt_name: str, **kwargs) -> str:
     """

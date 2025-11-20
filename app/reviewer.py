@@ -1,62 +1,91 @@
 import json
 from typing import Dict, Any, Optional
 from app.prompts import get_prompt
+from dotenv import load_dotenv
+import os
+import google.generativeai as genai
+
+load_dotenv()
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 
-def call_llm(prompt: str, prompt_name: str = "SHORT_SUMMARY") -> str:
-    """LLM'ye istek gönder ve JSON cevap al (şimdilik mock)"""
+def call_llm(prompt: str, prompt_name: str = "SHORT_SUMMARY", max_tokens: int = 500) -> str:
+    """Gemini API'ye çağrı yap ve JSON cevap al"""
 
-    mock_responses = {
-        "SHORT_SUMMARY": {
-            "summary": "Bu değişiklik yeni bir doğrulama fonksiyonu ekledi",
-            "severity": "low",
-            "type": "feature"
-        },
-        "BUG_DETECTION": {
-            "issues": [
-                {
-                    "file": "auth.py",
-                    "line": 42,
-                    "severity": "medium",
-                    "description": "Burada None değeri kontrol edilmiyor",
-                    "suggestion": "if user is not None: ekle"
-                }
-            ],
-            "has_bugs": True,
-            "overall_risk": "medium"
-        },
-        "PERFORMANCE_REVIEW": {
-            "suggestions": [
-                {
-                    "file": "utils.py",
-                    "line": 15,
-                    "issue": "Döngü O(n²) karmaşıklığında çalışıyor",
-                    "recommendation": "Set veri yapısı kullan"
-                }
-            ],
-            "optimization_potential": "high"
-        },
-        "SECURITY_REVIEW": {
-            "vulnerabilities": [],
-            "has_security_issues": False,
-            "security_level": "safe"
-        }
-    }
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
 
-    response = mock_responses.get(prompt_name, mock_responses["SHORT_SUMMARY"])
-    return json.dumps(response, ensure_ascii=False)
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=max_tokens,
+                temperature=0.5,
+            )
+        )
+
+        return response.text.strip()
+
+    except Exception as e:
+        raise Exception(f"LLM çağrısı başarısız: {str(e)}")
 
 
 def parse_llm_response(response_text: str) -> Optional[Dict[str, Any]]:
-    """LLM'nin JSON cevabını parse et"""
+    """LLM cevabını parse et, JSON dışı kısımları temizle"""
+
     try:
-        return json.loads(response_text)
+        # JSON'ı çıkart (```json ... ``` içindeyse)
+        if "```json" in response_text:
+            start = response_text.find("```json") + 7
+            end = response_text.find("```", start)
+            json_str = response_text[start:end].strip()
+        elif "```" in response_text:
+            start = response_text.find("```") + 3
+            end = response_text.find("```", start)
+            json_str = response_text[start:end].strip()
+        else:
+            json_str = response_text
+
+        return json.loads(json_str)
+
     except json.JSONDecodeError:
         return None
 
 
+def extract_diff_summary(diff_text: str, max_lines: int = 30) -> str:
+    """Diff'ten önemli satırları ayıkla (sadece değişen kısımlar)"""
+
+    lines = diff_text.split("\n")
+    important_lines = []
+
+    for line in lines:
+        if line.startswith("+") or line.startswith("-"):
+            important_lines.append(line)
+        elif line.startswith("@@"):
+            important_lines.append(line)
+
+    # İlk max_lines'ı al
+    important = important_lines[:max_lines]
+    return "\n".join(important)
+
+
+def truncate_diff(diff_text: str, max_length: int = 3000) -> str:
+    """Diff'i çok uzunsa kırp, önemli satırları al"""
+
+    if len(diff_text) <= max_length:
+        return diff_text
+
+    # Önemli satırları ayıkla
+    summary = extract_diff_summary(diff_text, max_lines=20)
+
+    if len(summary) <= max_length:
+        return summary
+
+    # Hala çok uzunsa sondan kes
+    return summary[:max_length] + "\n[... Kesildi ...]"
+
+
 def review_diff(diff_text: str, review_types: list = None) -> Dict[str, Any]:
-    """Diff'i analiz et"""
+    """Diff'i gerçek LLM ile analiz et"""
 
     if review_types is None:
         review_types = ["short_summary", "bug_detection"]
@@ -74,24 +103,18 @@ def review_diff(diff_text: str, review_types: list = None) -> Dict[str, Any]:
         if review_type not in prompt_mapping:
             continue
 
-        prompt_name = prompt_mapping[review_type]
-        prompt = get_prompt(prompt_name, diff_text=diff_text)
-        llm_response = call_llm(prompt, prompt_name)
-        parsed = parse_llm_response(llm_response)
+        try:
+            prompt_name = prompt_mapping[review_type]
+            prompt = get_prompt(prompt_name, diff_text=diff_text)
+            llm_response = call_llm(prompt, prompt_name)
+            parsed = parse_llm_response(llm_response)
 
-        if parsed:
-            results["analyses"][review_type] = parsed
-        else:
-            results["analyses"][review_type] = {"error": "Parse hatası"}
+            if parsed:
+                results["analyses"][review_type] = parsed
+            else:
+                results["analyses"][review_type] = {"error": "Parse hatası", "raw": llm_response[:200]}
+
+        except Exception as e:
+            results["analyses"][review_type] = {"error": str(e)}
 
     return results
-
-
-def truncate_diff(diff_text: str, max_length: int = 4000) -> str:
-    """Çok uzun diff'leri kırıp max_length'e sığdır"""
-    if len(diff_text) <= max_length:
-        return diff_text
-
-    truncated = diff_text[:max_length]
-    truncated += "\n\n[... Diff çok uzun, kesildi ...]"
-    return truncated

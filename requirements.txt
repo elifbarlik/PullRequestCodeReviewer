@@ -1,5 +1,7 @@
 fastapi
 uvicorn
 PyGithub
-openai
+google-generativeai
 pytest
+python-dotenv
+pydantic
