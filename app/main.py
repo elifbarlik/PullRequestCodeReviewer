@@ -1,11 +1,54 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Optional
 from app.reviewer import review_diff, truncate_diff
 from app.github_client import GitHubClient
 import json
+import hmac
+import hashlib
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = FastAPI(title="PR Code Reviewer", version="0.1.0")
+
+def verify_github_signature(payload_body: bytes, signature_header: str) -> bool:
+    """
+    GitHub webhook signature'ını doğrula (HMAC SHA-256)
+
+    Args:
+        payload_body: Ham request body (bytes)
+        signature_header: X-Hub-Signature-256 header değeri
+
+    Returns:
+        True: Signature geçerli, False: Geçersiz
+    """
+    if not signature_header:
+        return False
+
+    # GitHub webhook secret'ı al
+    webhook_secret = os.getenv("GITHUB_WEBHOOK_SECRET")
+    if not webhook_secret:
+        print("⚠️  GITHUB_WEBHOOK_SECRET tanımlanmamış, signature kontrolü atlanıyor")
+        return True  # Development ortamında secret yoksa geçebilir
+
+    # Signature formatı: sha256=<hash>
+    if not signature_header.startswith("sha256="):
+        return False
+
+    expected_signature = signature_header.split("=")[1]
+
+    # HMAC hesapla
+    mac = hmac.new(
+        webhook_secret.encode(),
+        msg=payload_body,
+        digestmod=hashlib.sha256
+    )
+    calculated_signature = mac.hexdigest()
+
+    # Timing attack'a karşı secure comparison
+    return hmac.compare_digest(calculated_signature, expected_signature)
 
 class DiffRequest(BaseModel):
     diff_text: str
@@ -191,23 +234,45 @@ def _format_review_comment(result: dict) -> str:
     return comment
 
 
-@app.post("/github-review-webhook")
-async def github_webhook(payload: dict):
+@app.post("/webhook")
+async def github_webhook(request: Request):
     """
-    GitHub Webhook'dan gelen PR event'lerini handle et
+    GitHub Webhook'dan gelen PR event'lerini handle et (HMAC signature doğrulamalı)
 
     Workflow:
     1. PR açıldı/updated oldu
     2. Webhook POST yapıyor bu endpoint'e
-    3. Otomatik review başlatılır
+    3. Signature doğrulanır (HMAC SHA-256)
+    4. Otomatik review başlatılır
 
     GitHub Settings > Webhooks'a ekle:
-    - URL: https://YOUR_DOMAIN/github-review-webhook
+    - URL: https://YOUR_NGROK_URL/webhook
     - Content type: application/json
+    - Secret: GITHUB_WEBHOOK_SECRET ile aynı değer
     - Events: Pull requests
     """
 
     try:
+        # Ham body'yi al (signature kontrolü için gerekli)
+        body = await request.body()
+        signature = request.headers.get("X-Hub-Signature-256", "")
+
+        # Signature doğrula
+        if not verify_github_signature(body, signature):
+            print("❌ Geçersiz webhook signature!")
+            raise HTTPException(status_code=403, detail="Invalid signature")
+
+        # Payload'u parse et
+        payload = await request.json()
+
+        # Event tipini kontrol et
+        event_type = request.headers.get("X-GitHub-Event", "")
+        print(f"🔔 Webhook alındı: event={event_type}")
+
+        # Sadece pull_request event'leri işle
+        if event_type != "pull_request":
+            return {"status": "ignored", "reason": f"Event '{event_type}' desteklenmiyor"}
+
         action = payload.get("action")
         pr = payload.get("pull_request")
 
@@ -218,14 +283,16 @@ async def github_webhook(payload: dict):
         if action not in ["opened", "synchronize"]:
             return {"status": "ignored", "reason": f"Action '{action}' review tetiklemez"}
 
-        owner = pr.get("head", {}).get("repo", {}).get("owner", {}).get("login")
-        repo = pr.get("head", {}).get("repo", {}).get("name")
+        # Repository bilgilerini al
+        repo_data = payload.get("repository", {})
+        owner = repo_data.get("owner", {}).get("login")
+        repo = repo_data.get("name")
         pr_number = pr.get("number")
 
         if not all([owner, repo, pr_number]):
             raise ValueError("PR metadata eksik")
 
-        print(f"🔔 Webhook: PR #{pr_number} event={action}")
+        print(f"🔔 Webhook: {owner}/{repo}#{pr_number} event={action}")
 
         # Review'u tetikle
         review_request = GitHubReviewRequest(
@@ -237,6 +304,8 @@ async def github_webhook(payload: dict):
 
         return await github_review(review_request)
 
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"❌ Webhook hatası: {str(e)}")
         return {"status": "error", "message": str(e)}
