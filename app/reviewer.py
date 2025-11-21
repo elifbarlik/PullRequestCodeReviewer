@@ -22,7 +22,6 @@ def call_llm(prompt: str, prompt_name: str = "SHORT_SUMMARY", max_tokens: int = 
                 temperature=0.5,
             )
         )
-
         return response.text.strip()
 
     except Exception as e:
