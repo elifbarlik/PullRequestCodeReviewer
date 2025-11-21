@@ -13,8 +13,7 @@ def call_llm(prompt: str, prompt_name: str = "SHORT_SUMMARY", max_tokens: int = 
     """Gemini API'ye çağrı yap ve JSON cevap al"""
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
-
+        model = genai.GenerativeModel("gemini-2.5-flash")
         response = model.generate_content(
             prompt,
             generation_config=genai.types.GenerationConfig(
