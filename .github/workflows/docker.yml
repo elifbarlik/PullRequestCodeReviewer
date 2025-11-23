@@ -1,0 +1,36 @@
+name: Docker Build
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. Repo'yu checkout et
+    - uses: actions/checkout@v4
+
+    # 2. Docker setup (buildx)
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+
+    # 3. Docker image'ı build et
+    - name: Build Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: false
+        tags: pr-code-reviewer:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    # 4. Test de aynı image'ı kullanarak çalıştır
+    - name: Test Docker image
+      run: |
+        docker build -t pr-code-reviewer:test .
+        docker run --rm pr-code-reviewer:test pytest tests/ -v || true

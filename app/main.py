@@ -1,17 +1,23 @@
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Optional
-from app.reviewer import review_diff, truncate_diff
+from app.reviewer import review_diff, truncate_diff, ParseStatistics
 from app.github_client import GitHubClient
 import json
 import hmac
 import hashlib
 import os
 from dotenv import load_dotenv
+import logging
 
 load_dotenv()
 
-app = FastAPI(title="PR Code Reviewer", version="0.1.0")
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="PR Code Reviewer", version="0.2.0")
+
 
 def verify_github_signature(payload_body: bytes, signature_header: str) -> bool:
     """
@@ -30,8 +36,8 @@ def verify_github_signature(payload_body: bytes, signature_header: str) -> bool:
     # GitHub webhook secret'ı al
     webhook_secret = os.getenv("GITHUB_WEBHOOK_SECRET")
     if not webhook_secret:
-        print("⚠️  GITHUB_WEBHOOK_SECRET tanımlanmamış, signature kontrolü atlanıyor")
-        return True  # Development ortamında secret yoksa geçebilir
+        logger.warning("⚠️  GITHUB_WEBHOOK_SECRET tanımlanmamış")
+        return True
 
     # Signature formatı: sha256=<hash>
     if not signature_header.startswith("sha256="):
@@ -50,16 +56,21 @@ def verify_github_signature(payload_body: bytes, signature_header: str) -> bool:
     # Timing attack'a karşı secure comparison
     return hmac.compare_digest(calculated_signature, expected_signature)
 
+
 class DiffRequest(BaseModel):
     diff_text: str
     file_name: Optional[str] = None
     review_types: Optional[List[str]] = ["short_summary", "bug_detection"]
 
+
 class ReviewResponse(BaseModel):
     status: str
     file_name: Optional[str] = None
     diff_length: int
+    was_truncated: bool
     analyses: dict
+    metadata: Optional[dict] = None
+
 
 class GitHubReviewRequest(BaseModel):
     """GitHub PR otomatik review isteği"""
@@ -68,18 +79,37 @@ class GitHubReviewRequest(BaseModel):
     pr_number: int
     review_types: Optional[List[str]] = ["short_summary", "bug_detection"]
 
+
 @app.get("/health")
 async def health_check():
-    return {"status": "ok"}
+    """Health check endpoint"""
+    return {
+        "status": "ok",
+        "version": "0.2.0"
+    }
+
+
+@app.get("/stats")
+async def get_stats():
+    """Get parser statistics"""
+    return {
+        "total_attempts": ParseStatistics.total_attempts,
+        "successful": ParseStatistics.successful_parses,
+        "failed": ParseStatistics.failed_parses,
+        "success_rate": f"{ParseStatistics.get_success_rate():.1f}%"
+    }
 
 
 @app.post("/local-review", response_model=ReviewResponse)
 async def local_review(request: DiffRequest):
     """Local diff'i analiz et (manuel)"""
+
     if not request.diff_text or len(request.diff_text.strip()) == 0:
         raise HTTPException(status_code=400, detail="diff_text boş olamaz")
 
+    original_size = len(request.diff_text)
     diff_to_analyze = truncate_diff(request.diff_text, max_length=3000)
+    was_truncated = len(diff_to_analyze) < original_size
 
     valid_types = ["short_summary", "bug_detection", "performance", "security"]
     review_types = request.review_types or ["short_summary", "bug_detection"]
@@ -90,14 +120,22 @@ async def local_review(request: DiffRequest):
 
     try:
         result = review_diff(diff_text=diff_to_analyze, review_types=review_types)
+
+        # Track parse success
+        success = result["status"] == "success"
+        ParseStatistics.record_attempt(success)
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"LLM hatası: {str(e)}")
+        logger.error(f"Review error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Review hatası: {str(e)}")
 
     return ReviewResponse(
         status=result["status"],
         file_name=request.file_name,
-        diff_length=len(request.diff_text),
-        analyses=result["analyses"]
+        diff_length=original_size,
+        was_truncated=was_truncated,
+        analyses=result["analyses"],
+        metadata=result.get("metadata")
     )
 
 
@@ -105,15 +143,6 @@ async def local_review(request: DiffRequest):
 async def github_review(request: GitHubReviewRequest):
     """
     GitHub PR'den diff al, analiz et, sonuçları PR'ye comment olarak gönder
-
-    Örnek kullanım:
-    POST /github-review
-    {
-        "owner": "elifbarlik",
-        "repo": "PR-Reviewer-Test-Repo",
-        "pr_number": 2,
-        "review_types": ["short_summary", "bug_detection", "security"]
-    }
     """
 
     try:
@@ -121,7 +150,7 @@ async def github_review(request: GitHubReviewRequest):
         github_client = GitHubClient()
 
         # PR'den diff'i al
-        print(f"📥 PR'den diff alınıyor: {request.owner}/{request.repo}#{request.pr_number}")
+        logger.info(f"📥 PR'den diff alınıyor: {request.owner}/{request.repo}#{request.pr_number}")
         diff_text = github_client.get_pr_diff(
             owner=request.owner,
             repo=request.repo,
@@ -131,20 +160,25 @@ async def github_review(request: GitHubReviewRequest):
         if not diff_text or len(diff_text.strip()) == 0:
             raise HTTPException(status_code=400, detail="PR diff'i boş")
 
-        # Diff'i kırp (çok uzunsa)
-        diff_to_analyze = truncate_diff(diff_text, max_length=3000)
+        # Diff'i kırp
+        original_size = len(diff_text)
+        diff_to_analyze = truncate_diff(diff_text)
+        was_truncated = len(diff_to_analyze) < original_size
 
-        # Review yap
-        print(f"🔍 Analiz yapılıyor: {request.review_types}")
+        # Review yap (two-stage)
+        logger.info(f"🔍 Analiz yapılıyor: {request.review_types}")
         result = review_diff(
             diff_text=diff_to_analyze,
             review_types=request.review_types or ["short_summary", "bug_detection"]
         )
 
-        # Sonuçları PR'e comment olarak gönder
-        comment_body = _format_review_comment(result)
+        # Track parse success
+        ParseStatistics.record_attempt(result["status"] == "success")
 
-        print(f"💬 Comment gönderiliyor PR'ye...")
+        # Sonuçları PR'e comment olarak gönder
+        comment_body = _format_review_comment(result, was_truncated)
+
+        logger.info(f"💬 Comment gönderiliyor PR'ye...")
         github_client.post_pr_comment(
             owner=request.owner,
             repo=request.repo,
@@ -158,19 +192,27 @@ async def github_review(request: GitHubReviewRequest):
             "owner": request.owner,
             "repo": request.repo,
             "pr_number": request.pr_number,
-            "analyses": result["analyses"]
+            "diff_size": original_size,
+            "was_truncated": was_truncated,
+            "analyses": result["analyses"],
+            "metadata": result.get("metadata")
         }
 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"GitHub review hatası: {str(e)}")
+        logger.error(f"GitHub review error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Review hatası: {str(e)}")
 
 
-def _format_review_comment(result: dict) -> str:
-    """Review sonuçlarını GitHub comment formatına çevir"""
+def _format_review_comment(result: dict, was_truncated: bool = False) -> str:
+    """Format review results as GitHub comment"""
 
     comment = "## 🤖 PR Code Reviewer - Otomatik Analiz\n\n"
+
+    # Add truncation warning
+    if was_truncated:
+        comment += "⚠️ **Not:** Diff çok büyük olduğu için kısaltıldı. Analiz kısmi olabilir.\n\n"
 
     analyses = result.get("analyses", {})
 
@@ -227,9 +269,10 @@ def _format_review_comment(result: dict) -> str:
                     comment += f"- **Öneri:** {sugg.get('recommendation', 'N/A')}\n"
                 comment += f"\n**Optimizasyon Potansiyeli:** {perf.get('optimization_potential', 'low')}\n\n"
 
-    # Footer
+    # Add stats footer
     comment += "\n---\n"
-    comment += "*🤖 Bu yorum otomatik olarak oluşturulmuştur. [PR Code Reviewer](https://github.com) tarafından.*"
+    comment += f"**📊 Parser Stats:** {ParseStatistics.successful_parses} başarılı / {ParseStatistics.total_attempts} toplam ({ParseStatistics.get_success_rate():.0f}%)\n"
+    comment += "*🤖 Bu yorum otomatik olarak oluşturulmuştur.*"
 
     return comment
 
@@ -237,29 +280,17 @@ def _format_review_comment(result: dict) -> str:
 @app.post("/webhook")
 async def github_webhook(request: Request):
     """
-    GitHub Webhook'dan gelen PR event'lerini handle et (HMAC signature doğrulamalı)
-
-    Workflow:
-    1. PR açıldı/updated oldu
-    2. Webhook POST yapıyor bu endpoint'e
-    3. Signature doğrulanır (HMAC SHA-256)
-    4. Otomatik review başlatılır
-
-    GitHub Settings > Webhooks'a ekle:
-    - URL: https://YOUR_NGROK_URL/webhook
-    - Content type: application/json
-    - Secret: GITHUB_WEBHOOK_SECRET ile aynı değer
-    - Events: Pull requests
+    GitHub Webhook'dan gelen PR event'lerini handle et
     """
 
     try:
-        # Ham body'yi al (signature kontrolü için gerekli)
+        # Ham body'yi al
         body = await request.body()
         signature = request.headers.get("X-Hub-Signature-256", "")
 
         # Signature doğrula
         if not verify_github_signature(body, signature):
-            print("❌ Geçersiz webhook signature!")
+            logger.error("❌ Geçersiz webhook signature!")
             raise HTTPException(status_code=403, detail="Invalid signature")
 
         # Payload'u parse et
@@ -267,7 +298,7 @@ async def github_webhook(request: Request):
 
         # Event tipini kontrol et
         event_type = request.headers.get("X-GitHub-Event", "")
-        print(f"🔔 Webhook alındı: event={event_type}")
+        logger.info(f"🔔 Webhook alındı: event={event_type}")
 
         # Sadece pull_request event'leri işle
         if event_type != "pull_request":
@@ -292,7 +323,7 @@ async def github_webhook(request: Request):
         if not all([owner, repo, pr_number]):
             raise ValueError("PR metadata eksik")
 
-        print(f"🔔 Webhook: {owner}/{repo}#{pr_number} event={action}")
+        logger.info(f"🔔 Webhook: {owner}/{repo}#{pr_number} event={action}")
 
         # Review'u tetikle
         review_request = GitHubReviewRequest(
@@ -307,5 +338,5 @@ async def github_webhook(request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ Webhook hatası: {str(e)}")
+        logger.error(f"❌ Webhook hatası: {str(e)}")
         return {"status": "error", "message": str(e)}

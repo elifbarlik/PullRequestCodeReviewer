@@ -1,0 +1,47 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. Repo'yu checkout et
+    - uses: actions/checkout@v4
+
+    # 2. Python 3.11 kur
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    # 3. Dependencies install et
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov
+
+    # 4. Tests çalıştır
+    - name: Run tests
+      run: |
+        pytest tests/ -v --tb=short
+
+    # 5. Test badge'ı oluştur (opsiyonel)
+    - name: Create test badge
+      if: always()
+      run: |
+        # Test sonuçlarını kontrol et
+        if pytest tests/ -q > /dev/null 2>&1; then
+          echo "Tests passed!"
+          echo "BADGE_STATUS=passing" >> $GITHUB_ENV
+        else
+          echo "Tests failed!"
+          echo "BADGE_STATUS=failing" >> $GITHUB_ENV
+        fi

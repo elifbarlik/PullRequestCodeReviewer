@@ -180,12 +180,12 @@ class GitHubClient:
 # ============= Test Fonksiyonları =============
 
 def test_get_pr_diff():
-    """get_pr_diff test et"""
+    """get_pr_diff tests et"""
     print("=" * 60)
     print("TEST: get_pr_diff")
     print("=" * 60)
 
-    # Kendi repo ve PR numarası ile test et
+    # Kendi repo ve PR numarası ile tests et
     owner = input("Repository owner girin (örn: username): ").strip()
     repo = input("Repository adı girin (örn: pr-reviewer): ").strip()
     pr_number = int(input("PR numarası girin (örn: 1): "))
@@ -208,7 +208,7 @@ def test_get_pr_diff():
 
 
 def test_post_pr_comment():
-    """post_pr_comment test et"""
+    """post_pr_comment tests et"""
     print("\n" + "=" * 60)
     print("TEST: post_pr_comment")
     print("=" * 60)
@@ -220,7 +220,7 @@ def test_post_pr_comment():
     # Test comment
     test_body = """## 🤖 PR Code Reviewer - Test Comment
 
-Bu bir test yorumudur. Eğer bu mesajı görüyorsanız, GitHub API entegrasyonu çalışıyor!
+Bu bir tests yorumudur. Eğer bu mesajı görüyorsanız, GitHub API entegrasyonu çalışıyor!
 
 **Test detayları:**
 - ✅ Token geçerli
@@ -246,7 +246,7 @@ Bu bir test yorumudur. Eğer bu mesajı görüyorsanız, GitHub API entegrasyonu
 
 
 def test_get_pr_files():
-    """get_pr_files test et"""
+    """get_pr_files tests et"""
     print("\n" + "=" * 60)
     print("TEST: get_pr_files")
     print("=" * 60)
@@ -279,10 +279,10 @@ if __name__ == "__main__":
 
     menu = """
 Seçim yapın:
-1. get_pr_diff test et
-2. post_pr_comment test et
-3. get_pr_files test et
-4. Tümünü sırasıyla test et
+1. get_pr_diff tests et
+2. post_pr_comment tests et
+3. get_pr_files tests et
+4. Tümünü sırasıyla tests et
 0. Çık
 
 Seçiminiz: """
