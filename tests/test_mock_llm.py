@@ -9,6 +9,7 @@ import pytest
 import sys
 
 import os
+
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
@@ -20,7 +21,9 @@ class TestMockLLMOutputs:
 
     def test_parse_valid_json(self):
         """Test: Geçerli JSON parse ediliyor mu?"""
-        valid_json = '{"summary": "Added validation", "severity": "low", "type": "feature"}'
+        valid_json = (
+            '{"summary": "Added validation", "severity": "low", "type": "feature"}'
+        )
         result = JSONParser.parse(valid_json, "short_summary")
 
         assert result is not None, "Parser should not return None for valid JSON"
@@ -29,11 +32,11 @@ class TestMockLLMOutputs:
 
     def test_parse_json_in_markdown(self):
         """Test: Markdown içindeki JSON parse ediliyor mu?"""
-        markdown_json = '''
+        markdown_json = """
 ```json
 {"summary": "Fixed bug", "severity": "high", "type": "bugfix"}
 ```
-'''
+"""
         result = JSONParser.parse(markdown_json, "short_summary")
 
         assert result is not None, "Should extract JSON from markdown"
@@ -41,11 +44,11 @@ class TestMockLLMOutputs:
 
     def test_parse_json_with_text_before(self):
         """Test: JSON'dan önce yazı varsa parse ediliyor mu?"""
-        mixed = '''
+        mixed = """
 The code has been analyzed.
 
 {"summary": "Code improvement", "severity": "medium", "type": "refactor"}
-'''
+"""
         result = JSONParser.parse(mixed, "short_summary")
 
         assert result is not None, "Should extract JSON despite surrounding text"

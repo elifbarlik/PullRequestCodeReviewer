@@ -8,6 +8,7 @@ TEST 3: Different Diff Scenarios
 import pytest
 import sys
 import os
+
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 from app.reviewer import review_diff, TokenManager, truncate_diff
@@ -109,15 +110,18 @@ class TestDiffScenarios:
 
         assert result["status"] == "success"
         # Büyük diff'ler truncate olabilir
-        assert result["metadata"]["processed_size"] <= TokenManager.get_max_diff_length()
+        assert (
+            result["metadata"]["processed_size"] <= TokenManager.get_max_diff_length()
+        )
 
     def test_large_diff_summary_extraction(self, large_diff):
         """Test: Büyük diff önemli satırları koruyor mu?"""
         truncated = truncate_diff(large_diff)
 
         # Önemli markers korunmalı
-        assert "---" in truncated or "++" in truncated or "@@" in truncated, \
-            "Important diff markers should be preserved"
+        assert (
+            "---" in truncated or "++" in truncated or "@@" in truncated
+        ), "Important diff markers should be preserved"
 
     # SCENARIO 4: Çoklu dosya
     def test_multi_file_diff_success(self, multi_file_diff):
@@ -134,13 +138,15 @@ class TestDiffScenarios:
         assert multi_file_diff.count("+++ b/") == 3, "Should have 3 file changes"
 
     # GENERAL TESTS
-    def test_all_scenarios_return_valid_analyses(self, small_diff, medium_diff, large_diff, multi_file_diff):
+    def test_all_scenarios_return_valid_analyses(
+        self, small_diff, medium_diff, large_diff, multi_file_diff
+    ):
         """Test: Tüm scenario'lar valid analyses döndürüyor mu?"""
         scenarios = [
             ("small", small_diff),
             ("medium", medium_diff),
             ("large", large_diff),
-            ("multi", multi_file_diff)
+            ("multi", multi_file_diff),
         ]
 
         for name, diff in scenarios:
@@ -148,4 +154,6 @@ class TestDiffScenarios:
 
             assert result["status"] == "success", f"{name} diff failed"
             assert "analyses" in result, f"{name} diff missing analyses"
-            assert "short_summary" in result["analyses"], f"{name} diff missing short_summary"
+            assert (
+                "short_summary" in result["analyses"]
+            ), f"{name} diff missing short_summary"

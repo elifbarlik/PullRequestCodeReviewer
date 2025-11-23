@@ -18,13 +18,15 @@ class GitHubClient:
         """
         self.token = token or os.getenv("GITHUB_TOKEN")
         if not self.token:
-            raise ValueError("GITHUB_TOKEN env değişkeni veya token parametresi gereklidir")
+            raise ValueError(
+                "GITHUB_TOKEN env değişkeni veya token parametresi gereklidir"
+            )
 
         self.base_url = "https://api.github.com"
         self.headers = {
             "Authorization": f"token {self.token}",
             "Accept": "application/vnd.github.v3+json",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
 
     def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
@@ -90,7 +92,9 @@ class GitHubClient:
                 f"PR dosyaları alınamadı ({owner}/{repo}#{pr_number}): {str(e)}"
             )
 
-    def post_pr_comment(self, owner: str, repo: str, pr_number: int, body: str) -> Dict[str, Any]:
+    def post_pr_comment(
+        self, owner: str, repo: str, pr_number: int, body: str
+    ) -> Dict[str, Any]:
         """
         PR'e yorum yap
 
@@ -112,10 +116,7 @@ class GitHubClient:
 
         try:
             response = requests.post(
-                url,
-                headers=self.headers,
-                json=payload,
-                timeout=10
+                url, headers=self.headers, json=payload, timeout=10
             )
             response.raise_for_status()
 
@@ -127,14 +128,14 @@ class GitHubClient:
             )
 
     def post_pr_review_comment(
-            self,
-            owner: str,
-            repo: str,
-            pr_number: int,
-            commit_id: str,
-            path: str,
-            line: int,
-            body: str
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        commit_id: str,
+        path: str,
+        line: int,
+        body: str,
     ) -> Dict[str, Any]:
         """
         PR'de specific bir satıra review comment yap (inline comment)
@@ -153,31 +154,22 @@ class GitHubClient:
         """
         url = f"{self.base_url}/repos/{owner}/{repo}/pulls/{pr_number}/comments"
 
-        payload = {
-            "commit_id": commit_id,
-            "path": path,
-            "line": line,
-            "body": body
-        }
+        payload = {"commit_id": commit_id, "path": path, "line": line, "body": body}
 
         try:
             response = requests.post(
-                url,
-                headers=self.headers,
-                json=payload,
-                timeout=10
+                url, headers=self.headers, json=payload, timeout=10
             )
             response.raise_for_status()
 
             return response.json()
 
         except requests.exceptions.RequestException as e:
-            raise requests.RequestException(
-                f"Review comment gönderilemedii: {str(e)}"
-            )
+            raise requests.RequestException(f"Review comment gönderilemedii: {str(e)}")
 
 
 # ============= Test Fonksiyonları =============
+
 
 def test_get_pr_diff():
     """get_pr_diff tests et"""

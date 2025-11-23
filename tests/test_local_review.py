@@ -8,6 +8,7 @@ TEST 1: Local Review Endpoint Test
 import pytest
 import sys
 import os
+
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 from app.reviewer import review_diff, truncate_diff
@@ -31,11 +32,7 @@ class TestLocalReview:
     @pytest.fixture
     def expected_response_keys(self):
         """Beklenen response anahtarları"""
-        return {
-            "status": str,
-            "analyses": dict,
-            "metadata": dict
-        }
+        return {"status": str, "analyses": dict, "metadata": dict}
 
     def test_response_has_required_keys(self, sample_diff, expected_response_keys):
         """Test: Response zorunlu anahtarları içeriyor mu?"""
@@ -44,22 +41,25 @@ class TestLocalReview:
         # Check required keys
         for key, expected_type in expected_response_keys.items():
             assert key in result, f"Missing key: {key}"
-            assert isinstance(result[key], expected_type), \
-                f"Key {key} should be {expected_type}, got {type(result[key])}"
+            assert isinstance(
+                result[key], expected_type
+            ), f"Key {key} should be {expected_type}, got {type(result[key])}"
 
     def test_status_is_success(self, sample_diff):
         """Test: Status 'success' mi?"""
         result = review_diff(sample_diff, review_types=["short_summary"])
-        assert result["status"] == "success", f"Expected status 'success', got {result['status']}"
+        assert (
+            result["status"] == "success"
+        ), f"Expected status 'success', got {result['status']}"
 
     def test_analyses_has_short_summary(self, sample_diff):
         """Test: Analyses kısmında short_summary var mı?"""
         result = review_diff(sample_diff, review_types=["short_summary"])
 
-        assert "short_summary" in result["analyses"], \
-            "short_summary not in analyses"
-        assert isinstance(result["analyses"]["short_summary"], dict), \
-            "short_summary should be a dict"
+        assert "short_summary" in result["analyses"], "short_summary not in analyses"
+        assert isinstance(
+            result["analyses"]["short_summary"], dict
+        ), "short_summary should be a dict"
 
     def test_short_summary_has_required_fields(self, sample_diff):
         """Test: short_summary zorunlu alanları içeriyor mu?"""
@@ -82,8 +82,9 @@ class TestLocalReview:
     def test_small_diff_not_truncated(self, sample_diff):
         """Test: Küçük diff kesilmiyor mu?"""
         result = review_diff(sample_diff, review_types=["short_summary"])
-        assert result["metadata"]["was_truncated"] == False, \
-            "Small diff should not be truncated"
+        assert (
+            result["metadata"]["was_truncated"] == False
+        ), "Small diff should not be truncated"
 
     def test_diff_size_tracking(self, sample_diff):
         """Test: Diff boyutları doğru kaydediliyor mu?"""

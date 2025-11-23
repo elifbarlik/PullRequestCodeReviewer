@@ -17,7 +17,9 @@ class JSONParser:
     """Robust JSON parser with multiple fallback strategies"""
 
     @staticmethod
-    def parse(response_text: str, expected_structure: str = "generic") -> Optional[Dict[str, Any]]:
+    def parse(
+        response_text: str, expected_structure: str = "generic"
+    ) -> Optional[Dict[str, Any]]:
         """
         Parse LLM response with multiple fallback strategies
 
@@ -56,7 +58,9 @@ class JSONParser:
         # Strategy 5: Fallback empty response (graceful degradation)
         result = JSONParser._strategy_fallback_template(expected_structure)
         if result:
-            logger.warning(f"⚠️  Strategy 5 (Fallback Template) used for: {expected_structure}")
+            logger.warning(
+                f"⚠️  Strategy 5 (Fallback Template) used for: {expected_structure}"
+            )
             return result
 
         logger.error(f"❌ All strategies failed for response: {response_text[:100]}...")
@@ -103,16 +107,16 @@ class JSONParser:
             text = text.strip()
 
             # Remove BOM if present
-            if text.startswith('\ufeff'):
+            if text.startswith("\ufeff"):
                 text = text[1:]
 
             # Remove common prefixes
-            for prefix in ['```json', '```', 'json', 'JSON']:
+            for prefix in ["```json", "```", "json", "JSON"]:
                 if text.startswith(prefix):
-                    text = text[len(prefix):].strip()
+                    text = text[len(prefix) :].strip()
 
             # Remove common suffixes
-            text = text.rstrip('`')
+            text = text.rstrip("`")
 
             # Fix single quotes to double quotes (dangerous but sometimes necessary)
             # Only if no double quotes exist
@@ -120,12 +124,12 @@ class JSONParser:
                 text = text.replace("'", '"')
 
             # Fix unquoted keys: {key: -> {"key":
-            text = re.sub(r'{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'{"\1":', text)
-            text = re.sub(r',\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r',"\1":', text)
+            text = re.sub(r"{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:", r'{"\1":', text)
+            text = re.sub(r",\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:", r',"\1":', text)
 
             # Fix trailing commas: , ] -> ]
-            text = re.sub(r',\s*]', ']', text)
-            text = re.sub(r',\s*}', '}', text)
+            text = re.sub(r",\s*]", "]", text)
+            text = re.sub(r",\s*}", "}", text)
 
             # Try to parse fixed JSON
             return json.loads(text)
@@ -138,7 +142,7 @@ class JSONParser:
         """Extract JSON using regex patterns"""
         try:
             # Find JSON-like object: { ... }
-            match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text, re.DOTALL)
+            match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text, re.DOTALL)
             if match:
                 json_str = match.group(0)
                 return json.loads(json_str)
@@ -149,33 +153,29 @@ class JSONParser:
         return None
 
     @staticmethod
-    def _strategy_fallback_template(expected_structure: str) -> Optional[Dict[str, Any]]:
+    def _strategy_fallback_template(
+        expected_structure: str,
+    ) -> Optional[Dict[str, Any]]:
         """Return fallback empty response based on expected structure"""
 
         fallback_responses = {
             "short_summary": {
                 "summary": "Unable to analyze - parsing error",
                 "severity": "unknown",
-                "type": "unknown"
+                "type": "unknown",
             },
             "bug_detection": {
                 "issues": [],
                 "has_bugs": False,
-                "overall_risk": "unknown"
+                "overall_risk": "unknown",
             },
-            "performance": {
-                "suggestions": [],
-                "optimization_potential": "unknown"
-            },
+            "performance": {"suggestions": [], "optimization_potential": "unknown"},
             "security": {
                 "vulnerabilities": [],
                 "has_security_issues": False,
-                "security_level": "unknown"
+                "security_level": "unknown",
             },
-            "generic": {
-                "error": "Parsing failed",
-                "status": "degraded"
-            }
+            "generic": {"error": "Parsing failed", "status": "degraded"},
         }
 
         return fallback_responses.get(expected_structure, fallback_responses["generic"])
@@ -183,31 +183,25 @@ class JSONParser:
 
 # ============= Test Fonksiyonları =============
 
+
 def test_parser():
     """Test JSON parser with various malformed inputs"""
 
     test_cases = [
         # Test 1: Valid JSON
         ('{"summary": "tests", "severity": "low"}', True),
-
         # Test 2: JSON in markdown
         ('```json\n{"summary": "tests"}\n```', True),
-
         # Test 3: Single quotes
         ("{'summary': 'tests', 'severity': 'low'}", True),
-
         # Test 4: Unquoted keys
         ('{summary: "tests", severity: "low"}', True),
-
         # Test 5: Trailing commas
         ('{"summary": "tests", "severity": "low",}', True),
-
         # Test 6: Text before JSON
         ('Some explanation\n{"summary": "tests"}', True),
-
         # Test 7: Text after JSON
         ('{"summary": "tests"}\nMore explanation', True),
-
         # Test 8: Multiple issues
         ("```json\n{summary: 'tests', severity: 'low',}\n```", True),
     ]

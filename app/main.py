@@ -46,11 +46,7 @@ def verify_github_signature(payload_body: bytes, signature_header: str) -> bool:
     expected_signature = signature_header.split("=")[1]
 
     # HMAC hesapla
-    mac = hmac.new(
-        webhook_secret.encode(),
-        msg=payload_body,
-        digestmod=hashlib.sha256
-    )
+    mac = hmac.new(webhook_secret.encode(), msg=payload_body, digestmod=hashlib.sha256)
     calculated_signature = mac.hexdigest()
 
     # Timing attack'a karşı secure comparison
@@ -74,6 +70,7 @@ class ReviewResponse(BaseModel):
 
 class GitHubReviewRequest(BaseModel):
     """GitHub PR otomatik review isteği"""
+
     owner: str
     repo: str
     pr_number: int
@@ -83,10 +80,7 @@ class GitHubReviewRequest(BaseModel):
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {
-        "status": "ok",
-        "version": "0.2.0"
-    }
+    return {"status": "ok", "version": "0.2.0"}
 
 
 @app.get("/stats")
@@ -96,7 +90,7 @@ async def get_stats():
         "total_attempts": ParseStatistics.total_attempts,
         "successful": ParseStatistics.successful_parses,
         "failed": ParseStatistics.failed_parses,
-        "success_rate": f"{ParseStatistics.get_success_rate():.1f}%"
+        "success_rate": f"{ParseStatistics.get_success_rate():.1f}%",
     }
 
 
@@ -135,7 +129,7 @@ async def local_review(request: DiffRequest):
         diff_length=original_size,
         was_truncated=was_truncated,
         analyses=result["analyses"],
-        metadata=result.get("metadata")
+        metadata=result.get("metadata"),
     )
 
 
@@ -150,11 +144,11 @@ async def github_review(request: GitHubReviewRequest):
         github_client = GitHubClient()
 
         # PR'den diff'i al
-        logger.info(f"📥 PR'den diff alınıyor: {request.owner}/{request.repo}#{request.pr_number}")
+        logger.info(
+            f"📥 PR'den diff alınıyor: {request.owner}/{request.repo}#{request.pr_number}"
+        )
         diff_text = github_client.get_pr_diff(
-            owner=request.owner,
-            repo=request.repo,
-            pr_number=request.pr_number
+            owner=request.owner, repo=request.repo, pr_number=request.pr_number
         )
 
         if not diff_text or len(diff_text.strip()) == 0:
@@ -169,7 +163,7 @@ async def github_review(request: GitHubReviewRequest):
         logger.info(f"🔍 Analiz yapılıyor: {request.review_types}")
         result = review_diff(
             diff_text=diff_to_analyze,
-            review_types=request.review_types or ["short_summary", "bug_detection"]
+            review_types=request.review_types or ["short_summary", "bug_detection"],
         )
 
         # Track parse success
@@ -183,7 +177,7 @@ async def github_review(request: GitHubReviewRequest):
             owner=request.owner,
             repo=request.repo,
             pr_number=request.pr_number,
-            body=comment_body
+            body=comment_body,
         )
 
         return {
@@ -195,7 +189,7 @@ async def github_review(request: GitHubReviewRequest):
             "diff_size": original_size,
             "was_truncated": was_truncated,
             "analyses": result["analyses"],
-            "metadata": result.get("metadata")
+            "metadata": result.get("metadata"),
         }
 
     except HTTPException:
@@ -302,7 +296,10 @@ async def github_webhook(request: Request):
 
         # Sadece pull_request event'leri işle
         if event_type != "pull_request":
-            return {"status": "ignored", "reason": f"Event '{event_type}' desteklenmiyor"}
+            return {
+                "status": "ignored",
+                "reason": f"Event '{event_type}' desteklenmiyor",
+            }
 
         action = payload.get("action")
         pr = payload.get("pull_request")
@@ -312,7 +309,10 @@ async def github_webhook(request: Request):
 
         # Sadece "opened" ve "synchronize" event'leri işle
         if action not in ["opened", "synchronize"]:
-            return {"status": "ignored", "reason": f"Action '{action}' review tetiklemez"}
+            return {
+                "status": "ignored",
+                "reason": f"Action '{action}' review tetiklemez",
+            }
 
         # Repository bilgilerini al
         repo_data = payload.get("repository", {})
@@ -330,7 +330,7 @@ async def github_webhook(request: Request):
             owner=owner,
             repo=repo,
             pr_number=pr_number,
-            review_types=["short_summary", "bug_detection", "security"]
+            review_types=["short_summary", "bug_detection", "security"],
         )
 
         return await github_review(review_request)

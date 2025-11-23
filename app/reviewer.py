@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 # ============= TOKEN MANAGEMENT =============
 
+
 class TokenManager:
     """Manage token limits for LLM calls"""
 
@@ -110,14 +111,19 @@ def truncate_diff(diff_text: str, max_length: int = None) -> str:
 
     # Still too long - cut from the end
     logger.warning(f"⚠️  Summary still too long ({len(summary)} chars), cutting...")
-    truncated = summary[:max_length - 50] + "\n[... Diff truncated due to size limits ...]"
+    truncated = (
+        summary[: max_length - 50] + "\n[... Diff truncated due to size limits ...]"
+    )
 
     return truncated
 
 
 # ============= LLM CALLING WITH ERROR HANDLING =============
 
-def call_llm(prompt: str, prompt_name: str = "SHORT_SUMMARY", max_tokens: int = 500) -> str:
+
+def call_llm(
+    prompt: str, prompt_name: str = "SHORT_SUMMARY", max_tokens: int = 500
+) -> str:
     """
     Call Gemini API with error handling
 
@@ -143,7 +149,7 @@ def call_llm(prompt: str, prompt_name: str = "SHORT_SUMMARY", max_tokens: int = 
             generation_config=genai.types.GenerationConfig(
                 max_output_tokens=max_tokens,
                 temperature=0.2,  # Lower temperature for more deterministic responses
-            )
+            ),
         )
 
         response_text = response.text.strip()
@@ -156,7 +162,9 @@ def call_llm(prompt: str, prompt_name: str = "SHORT_SUMMARY", max_tokens: int = 
         raise Exception(f"LLM call failed for {prompt_name}: {str(e)}")
 
 
-def parse_llm_response(response_text: str, expected_type: str) -> Optional[Dict[str, Any]]:
+def parse_llm_response(
+    response_text: str, expected_type: str
+) -> Optional[Dict[str, Any]]:
     """
     Parse LLM response using robust parser with fallback strategies
 
@@ -184,6 +192,7 @@ def parse_llm_response(response_text: str, expected_type: str) -> Optional[Dict[
 
 
 # ============= TWO-STAGE ANALYSIS =============
+
 
 def analyze_diff_stage1(diff_text: str) -> Optional[Dict[str, Any]]:
     """
@@ -224,7 +233,7 @@ def analyze_diff_stage2(diff_text: str, review_types: List[str]) -> Dict[str, An
     prompt_mapping = {
         "bug_detection": "BUG_DETECTION",
         "performance": "PERFORMANCE_REVIEW",
-        "security": "SECURITY_REVIEW"
+        "security": "SECURITY_REVIEW",
     }
 
     for review_type in review_types:
@@ -233,7 +242,9 @@ def analyze_diff_stage2(diff_text: str, review_types: List[str]) -> Dict[str, An
 
         try:
             # Use full diff for detailed analysis
-            full_diff = truncate_diff(diff_text, max_length=TokenManager.get_max_diff_length())
+            full_diff = truncate_diff(
+                diff_text, max_length=TokenManager.get_max_diff_length()
+            )
 
             prompt_name = prompt_mapping[review_type]
             prompt = get_prompt(prompt_name, diff_text=full_diff)
@@ -246,19 +257,19 @@ def analyze_diff_stage2(diff_text: str, review_types: List[str]) -> Dict[str, An
                 results[review_type] = result
             else:
                 # Fallback response
-                results[review_type] = JSONParser._strategy_fallback_template(review_type)
+                results[review_type] = JSONParser._strategy_fallback_template(
+                    review_type
+                )
 
         except Exception as e:
             logger.error(f"Stage 2 ({review_type}) failed: {str(e)}")
-            results[review_type] = {
-                "error": str(e),
-                "status": "failed"
-            }
+            results[review_type] = {"error": str(e), "status": "failed"}
 
     return results
 
 
 # ============= MAIN ANALYSIS FUNCTION =============
+
 
 def review_diff(diff_text: str, review_types: List[str] = None) -> Dict[str, Any]:
     """
@@ -290,8 +301,8 @@ def review_diff(diff_text: str, review_types: List[str] = None) -> Dict[str, Any
             "original_size": len(diff_text),
             "processed_size": len(processed_diff),
             "was_truncated": len(processed_diff) < len(diff_text),
-            "stages_completed": []
-        }
+            "stages_completed": [],
+        },
     }
 
     # Stage 1: Always do summary
@@ -307,7 +318,7 @@ def review_diff(diff_text: str, review_types: List[str] = None) -> Dict[str, Any
             results["analyses"]["short_summary"] = {
                 "summary": "Analysis failed",
                 "severity": "unknown",
-                "type": "unknown"
+                "type": "unknown",
             }
 
     # Stage 2: Detailed analysis
@@ -326,6 +337,7 @@ def review_diff(diff_text: str, review_types: List[str] = None) -> Dict[str, Any
 
 
 # ============= STATISTICS TRACKING =============
+
 
 class ParseStatistics:
     """Track parsing success rate"""
