@@ -2,6 +2,11 @@
 
 An AI-powered code review tool that automatically analyzes pull requests opened on GitHub. It finds bugs in written code, detects security issues, and provides development suggestions.
 
+## Live Demo
+
+- **API**: https://pullrequestcodereviewer-production.up.railway.app
+- **Swagger**: https://pullrequestcodereviewer-production.up.railway.app/docs
+  
 ## Problem
 
 Manual code review is time-consuming and can create consistency issues. In large projects, it becomes difficult to review every pull request in detail, and some bugs may be missed. There is a need for an automated solution, especially for critical issues such as security vulnerabilities and performance problems.
