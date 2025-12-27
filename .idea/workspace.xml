@@ -4,14 +4,8 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f717473c-5dd0-4e02-9a33-444d84ac710f" name="Changes" comment="added readme.md">
-      <change afterPath="$PROJECT_DIR$/docker-compose.yml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/pr-reviewer.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/pr-reviewer.iml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/CI-CD.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/Docker.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/Test_Documantation.md" beforeDir="false" />
+    <list default="true" id="f717473c-5dd0-4e02-9a33-444d84ac710f" name="Changes" comment="dockerize backend and add docker-compose setup">
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -184,7 +178,15 @@
       <option name="project" value="LOCAL" />
       <updated>1763925141279</updated>
     </task>
-    <option name="localTasksCounter" value="13" />
+    <task id="LOCAL-00013" summary="dockerize backend and add docker-compose setup">
+      <option name="closed" value="true" />
+      <created>1766864752333</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1766864752333</updated>
+    </task>
+    <option name="localTasksCounter" value="14" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -216,6 +218,7 @@
     <MESSAGE value="Add LLM improvements v0.2.0 + Docker + Tests + CI/CD" />
     <MESSAGE value="last changes" />
     <MESSAGE value="added readme.md" />
-    <option name="LAST_COMMIT_MESSAGE" value="added readme.md" />
+    <MESSAGE value="dockerize backend and add docker-compose setup" />
+    <option name="LAST_COMMIT_MESSAGE" value="dockerize backend and add docker-compose setup" />
   </component>
 </project>
