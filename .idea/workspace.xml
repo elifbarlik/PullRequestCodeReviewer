@@ -4,8 +4,14 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f717473c-5dd0-4e02-9a33-444d84ac710f" name="Changes" comment="Add LLM improvements v0.2.0 + Docker + Tests + CI/CD">
+    <list default="true" id="f717473c-5dd0-4e02-9a33-444d84ac710f" name="Changes" comment="added readme.md">
+      <change afterPath="$PROJECT_DIR$/docker-compose.yml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/pr-reviewer.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/pr-reviewer.iml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/CI-CD.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Docker.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Test_Documantation.md" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -54,7 +60,9 @@
     &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
     &quot;git-widget-placeholder&quot;: &quot;master&quot;,
-    &quot;last_opened_file_path&quot;: &quot;C:/Users/elifb/Desktop/AI/pr-reviewer&quot;
+    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;C:/Users/elifb/Desktop/Pr-Review/pr-reviewer&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;
   }
 }</component>
   <component name="RecentsManager">
@@ -160,7 +168,23 @@
       <option name="project" value="LOCAL" />
       <updated>1763924166853</updated>
     </task>
-    <option name="localTasksCounter" value="11" />
+    <task id="LOCAL-00011" summary="last changes">
+      <option name="closed" value="true" />
+      <created>1763924921804</created>
+      <option name="number" value="00011" />
+      <option name="presentableId" value="LOCAL-00011" />
+      <option name="project" value="LOCAL" />
+      <updated>1763924921804</updated>
+    </task>
+    <task id="LOCAL-00012" summary="added readme.md">
+      <option name="closed" value="true" />
+      <created>1763925141279</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1763925141279</updated>
+    </task>
+    <option name="localTasksCounter" value="13" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -190,6 +214,8 @@
     <MESSAGE value="proje olusturuldu" />
     <MESSAGE value="changes" />
     <MESSAGE value="Add LLM improvements v0.2.0 + Docker + Tests + CI/CD" />
-    <option name="LAST_COMMIT_MESSAGE" value="Add LLM improvements v0.2.0 + Docker + Tests + CI/CD" />
+    <MESSAGE value="last changes" />
+    <MESSAGE value="added readme.md" />
+    <option name="LAST_COMMIT_MESSAGE" value="added readme.md" />
   </component>
 </project>
