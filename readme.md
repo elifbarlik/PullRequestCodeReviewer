@@ -1,91 +1,166 @@
 # PR Code Reviewer
 
-GitHub'da açılan pull request'leri otomatik olarak analiz eden, yapay zeka tabanlı kod inceleme aracı. Yazılan kodda hataları bulur, güvenlik sorunlarını tespit eder ve geliştirme önerileri sunar.
+An AI-powered code review tool that automatically analyzes pull requests opened on GitHub. It finds bugs in written code, detects security issues, and provides development suggestions.
 
-## Ne İşe Yaradığı
+## Problem
 
-Bu araç üç yoldan kullanılabilir. Birincisi, kod farkını doğrudan sisteme gönderip tahlil ettirmek. İkincisi, GitHub'dan otomatik olarak pull request'i çekerek incelemek ve sonuçları yorum olarak yazmak. Üçüncüsü ise webhook aracılığıyla PR açıldığında sistem otomatik olarak devreye girmek ve değerlendirme yapmak.
+Manual code review is time-consuming and can create consistency issues. In large projects, it becomes difficult to review every pull request in detail, and some bugs may be missed. There is a need for an automated solution, especially for critical issues such as security vulnerabilities and performance problems.
 
-## Kurulum Adımları
+## Solution
+
+PR Code Reviewer automatically analyzes pull requests using AI technology. It can be used in three different ways:
+
+1. **Local Review**: Send code diff directly to the system for analysis
+2. **GitHub Integration**: Automatically fetch pull request from GitHub, review it, and post results as comments
+3. **Webhook Support**: System automatically activates when a PR is opened or updated and performs evaluation
+
+## Key Features
+
+- **Multiple Analysis Types**: Short summary, bug detection, security review, performance analysis
+- **Two-Stage Analysis**: Quick summary and detailed review stages
+- **Robust JSON Parser**: Reliable JSON parsing with 5 different fallback strategies
+- **Token Management**: Manage token limits with automatic diff truncation
+- **GitHub Webhook Support**: Automatic PR event handling
+- **Parser Statistics**: Success rate tracking and monitoring
+
+## Tech Stack
+
+- **Framework**: FastAPI
+- **Server**: Uvicorn
+- **AI Model**: Google Gemini (google-generativeai)
+- **GitHub Integration**: PyGithub
+- **Testing**: Pytest
+- **Containerization**: Docker, Docker Compose
+- **Language**: Python 3.11
+
+## Architecture Notes
+
+The project consists of three main components:
+
+1. **reviewer.py**: Performs analysis in two stages
+   - Stage 1: Quick summary generation (low token usage)
+   - Stage 2: Detailed review (bug detection, security, performance)
+
+2. **json_parser.py**: Parses AI responses using five different methods
+   - Direct JSON parse
+   - Markdown code block extraction
+   - Common error fixing (single quotes, unquoted keys, trailing commas)
+   - Regex extraction
+   - Fallback template
+
+3. **github_client.py**: Communicates with GitHub API to fetch pull request information and is responsible for writing comments
+
+### Analysis Types
+
+The system performs code review from four different perspectives:
+- **Short Summary**: Change summary and importance level
+- **Bug Detection**: Potential bugs and logic issues in written code
+- **Security Review**: Security vulnerabilities and data protection deficiencies
+- **Performance Analysis**: Performance issues and improvement suggestions
+
+## Getting Started
+
+### Option 1: Docker Compose (Recommended)
+
+The easiest and most consistent way to run:
 
 ```bash
+# Create .env file
+GITHUB_TOKEN=your_github_token
+GEMINI_API_KEY=your_gemini_api_key
+GITHUB_WEBHOOK_SECRET=your_webhook_secret  # (optional)
+
+# Start the service
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop the service
+docker-compose down
+```
+
+The system will run at `http://localhost:8000`.
+
+### Option 2: Local Development
+
+```bash
+# Install dependencies
 pip install -r requirements.txt
-```
 
-```
-GITHUB_TOKEN=github_tokeniniz
-GEMINI_API_KEY=gemini_anahtarınız
-GITHUB_WEBHOOK_SECRET=webhook_sifresi
-```
+# Create .env file
+GITHUB_TOKEN=your_github_token
+GEMINI_API_KEY=your_gemini_api_key
+GITHUB_WEBHOOK_SECRET=your_webhook_secret  # (optional)
 
-## Nasıl Çalıştırılır
-
-```bash
+# Start the application
 uvicorn app.main:app --reload
 ```
 
-Sistem 8000 numaralı portta açılacak ve şu işlemleri yapabileceksiniz:
+The system will run at `http://localhost:8000`.
 
-**Durumu Kontrol Etme:**
+## Environment Variables
+
+You need to define the following environment variables in the `.env` file or system environment:
+
+- `GITHUB_TOKEN`: GitHub Personal Access Token (required to read PRs and write comments)
+- `GEMINI_API_KEY`: Google Gemini API key (required for AI analysis)
+- `GITHUB_WEBHOOK_SECRET`: Used for GitHub webhook signature verification (optional, but recommended for production)
+
+## API Endpoints
+
+**Health Check:**
 ```bash
 curl http://localhost:8000/health
 ```
 
-**Kod Farkını Analiz Etme:**
+**Local Diff Analysis:**
 ```bash
 curl -X POST http://localhost:8000/local-review \
   -H "Content-Type: application/json" \
   -d '{
-    "diff_text": "--- a/dosya.py\n+++ b/dosya.py\n...",
+    "diff_text": "--- a/file.py\n+++ b/file.py\n...",
     "review_types": ["short_summary", "bug_detection"]
   }'
 ```
 
-**GitHub'dan Pull Request İnceleme:**
+**GitHub PR Review:**
 ```bash
 curl -X POST http://localhost:8000/github-review \
   -H "Content-Type: application/json" \
   -d '{
-    "owner": "kullaniciadi",
-    "repo": "depo-adi",
+    "owner": "username",
+    "repo": "repo-name",
     "pr_number": 1
   }'
 ```
 
-**İstatistikleri Görme:**
+**Statistics:**
 ```bash
 curl http://localhost:8000/stats
 ```
 
-## Docker ile Çalıştırma
-
-Sabit bir ortamda çalıştırmak için Docker kullanabilirsiniz:
+## Testing
 
 ```bash
-docker build -t pr-code-reviewer .
-
-docker run -p 8000:8000 \
-  -e GITHUB_TOKEN=tokeniniz \
-  -e GEMINI_API_KEY=anahtarınız \
-  pr-code-reviewer
-```
-
-## İç Yapısı
-
-Proje üç ana bölümden oluşmaktadır. İlk olarak `reviewer.py` dosyası analiz işlemini iki aşamada gerçekleştirir: Birinci aşamada hızlı bir özet oluşturur, ikinci aşamada daha ayrıntılı inceleme yapar. İkinci olarak `json_parser.py` yapay zekanın verdiği cevapları beş farklı yöntemle ayrıştırır ve hatalı formatlı yanıtları da düzeltir. Üçüncü olarak `github_client.py` GitHub API'siyle iletişim kurarak pull request bilgilerini alır ve yorum yazmakla görevlidir.
-
-## Analiz Türleri
-
-Sistem dört farklı açıdan kod incelemesi yapar. Değişiklik özeti ve önem derecesini belirler. Yazılan kodda olabilecek hataları ve mantık sorunlarını bulur. Güvenlik açıklarını ve veri koruma eksikliklerini tespit eder. Son olarak performans sorunlarını tanıyarak iyileştirme önerileri sunar.
-
-## Test Etme
-
-```bash
+# All tests
 pytest tests/ -v
+
+# Specific test
+pytest tests/test_local_review.py -v
+
+# Coverage
+pytest tests/ --cov=app --cov-report=html
 ```
 
-Sistemde 24 adet test vardır ve hepsi başarıyla geçmektedir. Bunlar schema doğrulaması, parser sağlamlığı ve farklı kod durumlarını kapsamaktadır.
+The system has 24 tests and all pass successfully. These cover schema validation, parser robustness, and different code scenarios.
 
-## Otomatikleştirme
+## GitHub Webhook Setup
 
-GitHub Actions kullanarak code push olduğunda otomatik testler yapılır. Main branch'e commit atıldığında Docker image hazırlanır ve saklanır. Bu sayede yapılan değişiklikler kontrol edilir ve üretim ortamına hazır hale getirilir.
+Repository settings → Webhooks → Add webhook
+- **Payload URL**: `https://your-domain/webhook`
+- **Content type**: `application/json`
+- **Events**: Pull requests
+- **Secret**: Your `GITHUB_WEBHOOK_SECRET` value
+
+After the webhook is set up, the system will automatically analyze when a PR is opened or updated and add the results as comments to the PR.
