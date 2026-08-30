@@ -5,3 +5,6 @@ google-generativeai
 pytest
 python-dotenv
 pydantic
+PyJWT
+cryptography
+httpx
