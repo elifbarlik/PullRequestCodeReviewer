@@ -33,11 +33,11 @@ def verify_github_signature(payload_body: bytes, signature_header: str) -> bool:
     if not signature_header:
         return False
 
-    # GitHub webhook secret'ı al
+    # GitHub webhook secret'ı al — tanımlı değilse webhook'u reddet
     webhook_secret = os.getenv("GITHUB_WEBHOOK_SECRET")
     if not webhook_secret:
-        logger.warning("⚠️  GITHUB_WEBHOOK_SECRET tanımlanmamış")
-        return True
+        logger.error("❌ GITHUB_WEBHOOK_SECRET tanımlanmamış — webhook reddedildi")
+        return False
 
     # Signature formatı: sha256=<hash>
     if not signature_header.startswith("sha256="):
