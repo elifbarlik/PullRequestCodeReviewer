@@ -27,8 +27,8 @@ PR Code Reviewer automatically analyzes pull requests using AI technology. It ca
 
 - **Framework**: FastAPI
 - **Server**: Uvicorn
-- **AI Model**: Google Gemini (google-generativeai)
-- **GitHub Integration**: PyGithub
+- **AI Model**: Google Gemini (google-genai)
+- **GitHub Integration**: GitHub App (JWT + installation tokens, requests + PyJWT)
 - **Testing**: Pytest
 - **Containerization**: Docker, Docker Compose
 - **Language**: Python 3.11

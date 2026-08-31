@@ -13,10 +13,21 @@ from app.prompts import get_prompt, get_prompt_config
 from app.json_parser import JSONParser
 from dotenv import load_dotenv
 import os
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 load_dotenv()
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
+# Gemini client lazy oluşturulur (import anında GEMINI_API_KEY zorunlu olmasın —
+# testler ve tooling'in .env'siz de import edilebilmesi için).
+_gemini_client: Optional["genai.Client"] = None
+
+
+def _get_gemini_client() -> "genai.Client":
+    global _gemini_client
+    if _gemini_client is None:
+        _gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    return _gemini_client
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -138,25 +149,26 @@ def call_llm(
         gen_config_kwargs = {
             "max_output_tokens": max_tokens,
             "temperature": temperature,
+            # gemini-2.5-flash bir "thinking" modeli — thinking_budget=0
+            # olmadan max_output_tokens'ın bir kısmı görünmeyen düşünme
+            # adımına gidiyor (bkz. Faz 1 doğrulamasındaki short_summary
+            # kırpılması buggu). Bu görevlerin hiçbiri derin akıl yürütme
+            # gerektirmiyor (sınıflandırma / yapılandırılmış çıkarım),
+            # o yüzden thinking tamamen kapatılıyor: daha hızlı + daha ucuz.
+            "thinking_config": types.ThinkingConfig(thinking_budget=0),
         }
         if use_json_mode:
             gen_config_kwargs["response_mime_type"] = "application/json"
 
-        model = genai.GenerativeModel(
-            "gemini-2.5-flash",
-            generation_config=genai.types.GenerationConfig(**gen_config_kwargs),
+        logger.info(f"📤 LLM çağrısı: {prompt_name} (max_tokens={max_tokens}, json_mode={use_json_mode})")
+        response = _get_gemini_client().models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(**gen_config_kwargs),
         )
 
-        logger.info(f"📤 LLM çağrısı: {prompt_name} (max_tokens={max_tokens}, json_mode={use_json_mode})")
-        response = model.generate_content(prompt)
-
-        # Güvenli yanıt erişimi
-        if hasattr(response, "text") and response.text:
-            response_text = response.text.strip()
-        elif response.candidates:
-            parts = response.candidates[0].content.parts
-            response_text = "".join(p.text for p in parts if hasattr(p, "text")).strip()
-        else:
+        response_text = (response.text or "").strip()
+        if not response_text:
             raise Exception("Gemini boş yanıt döndürdü")
 
         logger.info(f"📥 Yanıt alındı ({len(response_text)} karakter)")
