@@ -31,19 +31,26 @@ def _has_network(host: str = "8.8.8.8", port: int = 53, timeout: float = 2.0) ->
 
 NETWORK_AVAILABLE = _has_network()
 
+import shutil
 
+SEMGREP_AVAILABLE = shutil.which("semgrep") is not None
 
 
 def pytest_collection_modifyitems(config, items):
-    """Ağ erişimi yoksa @pytest.mark.network testlerini atla — CI/offline ortamda asılı kalmasınlar."""
-    if NETWORK_AVAILABLE:
-        return
+    """Ağ erişimi yoksa @pytest.mark.network, semgrep kurulu değilse
+    @pytest.mark.requires_semgrep testlerini atla — CI/offline ortamda
+    asılı kalmasınlar veya ImportError ile patlamasınlar."""
     skip_network = pytest.mark.skip(
         reason="Ağ erişimi yok — gerçek Gemini API çağrısı gerektiren tests atlandı"
     )
+    skip_semgrep = pytest.mark.skip(
+        reason="semgrep CLI kurulu değil — `pip install semgrep` ile kurun"
+    )
     for item in items:
-        if "network" in item.keywords:
+        if not NETWORK_AVAILABLE and "network" in item.keywords:
             item.add_marker(skip_network)
+        if not SEMGREP_AVAILABLE and "requires_semgrep" in item.keywords:
+            item.add_marker(skip_semgrep)
 
 
 @pytest.fixture(autouse=True)
@@ -82,6 +89,9 @@ def pytest_configure(config):
     """Pytest başlangıcında çalışır"""
     config.addinivalue_line(
         "markers", "network: gerçek Gemini API çağrısı yapan tests (ağ erişimi gerektirir)"
+    )
+    config.addinivalue_line(
+        "markers", "requires_semgrep: semgrep CLI kurulu olmasını gerektiren tests"
     )
     print("\n" + "=" * 70)
     print("🧪 PR CODE REVIEWER - TEST SUITE")
