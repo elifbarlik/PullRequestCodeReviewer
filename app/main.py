@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from app.reviewer import review_diff, truncate_diff, ParseStatistics
 from app.github_client import GitHubAppClient
+from app.semgrep_scanner import scan_diff, SemgrepNotAvailable
 import json
 import hmac
 import hashlib
@@ -159,6 +160,58 @@ async def local_review(request: DiffRequest):
 # İç yardımcı: PR analizi ve yorum gönderme
 # -------------------------------------------------------------------
 
+def _run_semgrep_for_pr(
+    client: GitHubAppClient, owner: str, repo: str, pr_number: int, diff_text: str
+) -> dict:
+    """
+    PR'de değişen dosyaların tam içeriğini çekip Semgrep'i çalıştırır.
+
+    Dönüş şekli main.py <-> reviewer.py arasındaki sözleşmedir:
+      {"status": "ok", "findings": [...]}          — tarama başarıyla çalıştı
+      {"status": "unavailable", "error": "..."}    — semgrep CLI kurulu değil
+      {"status": "error", "error": "..."}          — GitHub API veya semgrep hata verdi
+
+    "findings": [] (boş liste) ile status="unavailable"/"error" KESİNLİKLE
+    karıştırılmamalı — biri "tarandı, temiz", diğeri "hiç taranamadı" demek.
+    Bu ayrım olmadan bir tarama hatası sessizce "güvenli" görünürdü.
+    """
+    try:
+        pr_details = client.get_pr_details(owner, repo, pr_number)
+        head_sha = pr_details.get("head", {}).get("sha")
+        pr_files = client.get_pr_files(owner, repo, pr_number)
+    except Exception as e:
+        logger.error(f"❌ PR dosya listesi alınamadı, Semgrep atlanıyor: {e}")
+        return {"status": "error", "error": f"PR dosyaları alınamadı: {e}"}
+
+    if not head_sha:
+        return {"status": "error", "error": "PR head SHA'sı bulunamadı"}
+
+    files_content = {}
+    for f in pr_files:
+        if f.get("status") == "removed":
+            continue
+        filename = f.get("filename")
+        if not filename:
+            continue
+        try:
+            content = client.get_file_content(owner, repo, filename, ref=head_sha)
+        except Exception as e:
+            logger.warning(f"⚠️  {filename} içeriği alınamadı, atlanıyor: {e}")
+            continue
+        if content is not None:
+            files_content[filename] = content
+
+    try:
+        findings = scan_diff(files_content, diff_text)
+        return {"status": "ok", "findings": findings}
+    except SemgrepNotAvailable as e:
+        logger.warning(f"⚠️  Semgrep CLI kurulu değil, güvenlik taraması atlanıyor: {e}")
+        return {"status": "unavailable", "error": str(e)}
+    except Exception as e:
+        logger.error(f"❌ Semgrep taraması başarısız: {e}")
+        return {"status": "error", "error": str(e)}
+
+
 async def _run_pr_review(
     installation_id: int,
     owner: str,
@@ -193,8 +246,19 @@ async def _run_pr_review(
     diff_to_analyze = truncate_diff(diff_text)
     was_truncated = len(diff_to_analyze) < original_size
 
+    security_scan = None
+    if "security" in review_types:
+        logger.info("🔬 Semgrep taraması başlıyor...")
+        security_scan = _run_semgrep_for_pr(client, owner, repo, pr_number, diff_text)
+        logger.info(f"🔬 Semgrep sonucu: status={security_scan['status']}, "
+                    f"bulgu={len(security_scan.get('findings', []))}")
+
     logger.info(f"🔍 Analiz başlıyor: {review_types}")
-    result = review_diff(diff_text=diff_to_analyze, review_types=review_types)
+    result = review_diff(
+        diff_text=diff_to_analyze,
+        review_types=review_types,
+        security_scan=security_scan,
+    )
     ParseStatistics.record_attempt(result["status"] == "success")
 
     comment_body = _format_review_comment(result, was_truncated)
@@ -401,10 +465,15 @@ def _format_review_comment(result: dict, was_truncated: bool = False) -> str:
     if "security" in analyses:
         security = analyses["security"]
         if isinstance(security, dict) and "error" not in security:
-            if security.get("has_security_issues"):
-                comment += "### 🚨 Güvenlik Bulguları\n"
+            if security.get("scan_error"):
+                # Tarama hiç çalışmadı — ASLA "güvenli" denmez, şeffaf uyarı verilir
+                comment += "### ⚠️ Güvenlik Taraması Yapılamadı\n"
+                comment += f"Bu PR için otomatik güvenlik taraması tamamlanamadı: {security['scan_error']}\n"
+                comment += "Lütfen değişiklikleri manuel olarak gözden geçirin.\n\n"
+            elif security.get("has_security_issues"):
+                comment += "### 🚨 Güvenlik Bulguları (Semgrep + Gemini)\n"
                 for vuln in security.get("vulnerabilities", []):
-                    comment += f"\n**⚠️ {vuln.get('file', 'bilinmiyor')}:{vuln.get('line', '?')}**\n"
+                    comment += f"\n**⚠️ {vuln.get('file', 'bilinmiyor')}:{vuln.get('line', '?')}** — {vuln.get('type', 'bilinmiyor')}\n"
                     comment += f"- **Risk:** {vuln.get('risk', 'bilinmiyor')}\n"
                     comment += f"- **Açıklama:** {vuln.get('description', 'N/A')}\n"
                     comment += f"- **Öneri:** {vuln.get('recommendation', 'N/A')}\n"

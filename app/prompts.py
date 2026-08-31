@@ -109,16 +109,46 @@ Sorun varsa (Türkçe yaz):
 
 SADECE JSON döndür:"""
 
+# ── Semgrep bulgu açıklaması ─────────────────────────────────────────────────
+# Faz 0'daki hibrit mimari kararı: Gemini artık güvenlik açığı "aramıyor" —
+# Semgrep zaten deterministik olarak bulmuş, Gemini SADECE bu bulguları
+# Türkçe ve öğretici şekilde açıklıyor. Bulgunun var olup olmadığına veya
+# önem derecesine Gemini karar vermez.
+
+SECURITY_EXPLAIN = """Sen bir uygulama güvenliği eğitmenisin. Aşağıda Semgrep (statik analiz
+aracı) tarafından bu pull request'te tespit edilmiş güvenlik bulguları var.
+
+ÖNEMLİ: Bu bulguların gerçek olup olmadığını veya önem derecesini SEN belirlemiyorsun —
+bunlar zaten Semgrep tarafından kesinleştirildi. Senin tek görevin, her bulgu için
+junior bir geliştiricinin anlayacağı, öğretici bir Türkçe açıklama üretmek.
+
+Semgrep bulguları (JSON, her biri bir "index" içerir):
+{findings_json}
+
+İlgili kod diff'i (bağlam için):
+{diff_text}
+
+Her bulgu için ÜRETMEN gerekenler:
+- description: Bu neden güvenlik riski? Somut olarak nasıl istismar edilebilir? (Türkçe, 1-2 cümle)
+- recommendation: Nasıl düzeltilir? Kısa bir kod örneğiyle göster. (Türkçe)
+
+SADECE geçerli bir JSON nesnesi döndür. Markdown kod bloğu, açıklama veya
+JSON dışında HİÇBİR metin YAZMA:
+{{"explanations": [{{"index": 0, "description": "...", "recommendation": "..."}}]}}
+
+Girdi kaç bulgu içeriyorsa (aynı index'lerle) o kadar açıklama üret. SADECE JSON döndür:"""
+
 # ── Prompt konfigürasyonu ───────────────────────────────────────────────────
 
 PROMPT_CONFIG = {
     "SHORT_SUMMARY": {
         "description": "Değişiklik özeti",
-        # Gemini 2.5 Flash "thinking" modelidir — bu eski (deprecated)
-        # google-generativeai SDK'sında thinking_budget kapatılamıyor,
-        # yani model max_output_tokens'ın bir kısmını görünmeyen "düşünme"
-        # token'larına harcıyor. 300 çok düşüktü: yanıt gerçek JSON'a
-        # başlamadan kesiliyordu (bkz. 29 karakterlik kırpılmış yanıt).
+        # 31 Ağustos'ta google-genai'a geçilip thinking_budget=0 ile
+        # thinking kapatıldı (bkz. reviewer.py call_llm) — o yüzden bu
+        # artık thinking token'ları için gerekli değil, sadece rahat bir
+        # üst sınır. Eskiden (deprecated google-generativeai SDK'sında
+        # thinking kapatılamazken) 300 çok düşüktü ve yanıt gerçek
+        # JSON'a başlamadan kesiliyordu (29 karakterde kırpılma).
         "max_tokens": 2048,
         "temperature": 0.1,
         "fields_needed": ["diff_text"],
@@ -141,6 +171,14 @@ PROMPT_CONFIG = {
         "temperature": 0.1,
         "fields_needed": ["diff_text"],
     },
+    "SECURITY_EXPLAIN": {
+        "description": "Semgrep bulgu açıklaması (hibrit mimari)",
+        # Birden fazla bulgu aynı çağrıda açıklanabilir, o yüzden diğer
+        # promptlardan daha geniş bir bütçe
+        "max_tokens": 2048,
+        "temperature": 0.2,
+        "fields_needed": ["findings_json", "diff_text"],
+    },
 }
 
 
@@ -151,6 +189,7 @@ def get_prompt(prompt_name: str, **kwargs) -> str:
         "SECURITY_REVIEW": SECURITY_REVIEW,
         "BUG_DETECTION": BUG_DETECTION,
         "PERFORMANCE_REVIEW": PERFORMANCE_REVIEW,
+        "SECURITY_EXPLAIN": SECURITY_EXPLAIN,
     }
     if prompt_name not in templates:
         raise ValueError(f"Bilinmeyen prompt: {prompt_name}")

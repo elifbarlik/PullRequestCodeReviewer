@@ -245,6 +245,45 @@ class GitHubAppClient:
         response.raise_for_status()
         return response.json()
 
+    def get_file_content(
+        self, owner: str, repo: str, path: str, ref: str
+    ) -> Optional[str]:
+        """
+        Belirli bir ref'teki (commit SHA / branch) dosyanın tam içeriğini
+        döndürür. Semgrep taraması diff hunk'ı değil, gerçek dosya içeriği
+        ister — bu yüzden diff'ten ayrı bir Contents API çağrısı gerekir.
+
+        Args:
+            path: Repo köküne göre dosya yolu (diff'teki gibi)
+            ref: Commit SHA'sı (genelde PR'nin head SHA'sı)
+
+        Returns:
+            Dosya içeriği (UTF-8 metin) veya dosya bulunamadı/binary/
+            dizinse None. Semgrep zaten kaynak kodu taradığı için binary
+            dosyaların atlanması sorun değil.
+        """
+        import base64
+
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/contents/{path}"
+        response = requests.get(
+            url, headers=self._auth_headers(), params={"ref": ref}, timeout=10
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+
+        data = response.json()
+        if isinstance(data, list):
+            # path bir dizin olarak geldi (beklenmez, savunma amaçlı)
+            return None
+        if data.get("encoding") != "base64" or not data.get("content"):
+            return None
+
+        try:
+            return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
+        except Exception:
+            return None
+
     def post_pr_comment(
         self, owner: str, repo: str, pr_number: int, body: str
     ) -> Dict[str, Any]:
