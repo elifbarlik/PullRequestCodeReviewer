@@ -1,10 +1,9 @@
 fastapi
 uvicorn
-PyGithub
 google-generativeai
-pytest
+requests
 python-dotenv
 pydantic
 PyJWT
 cryptography
-httpx
+pytest

@@ -14,6 +14,7 @@ sys.path.insert(0, project_root)
 from app.reviewer import review_diff, TokenManager, truncate_diff
 
 
+@pytest.mark.network
 class TestDiffScenarios:
     """Farklı diff senaryoları"""
 
