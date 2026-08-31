@@ -122,43 +122,48 @@ def truncate_diff(diff_text: str, max_length: int = None) -> str:
 
 
 def call_llm(
-    prompt: str, prompt_name: str = "SHORT_SUMMARY", max_tokens: int = 500
+    prompt: str,
+    prompt_name: str = "SHORT_SUMMARY",
+    max_tokens: int = 500,
+    temperature: float = 0.1,
+    use_json_mode: bool = True,
 ) -> str:
     """
-    Call Gemini API with error handling
+    Gemini API çağrısı — hata yönetimiyle.
 
-    Args:
-        prompt: Full prompt text
-        prompt_name: Prompt name (for logging)
-        max_tokens: Max output tokens
-
-    Returns:
-        Raw LLM response text
-
-    Raises:
-        Exception: If API call fails
+    use_json_mode=True  → response_mime_type='application/json' (detaylı analizler için)
+    use_json_mode=False → serbest metin modu (kısa özet için, güvenlik filtresi sorunu yok)
     """
-
     try:
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        gen_config_kwargs = {
+            "max_output_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if use_json_mode:
+            gen_config_kwargs["response_mime_type"] = "application/json"
 
-        logger.info(f"📤 LLM call: {prompt_name}")
-
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.types.GenerationConfig(
-                max_output_tokens=max_tokens,
-                temperature=0.2,  # Lower temperature for more deterministic responses
-            ),
+        model = genai.GenerativeModel(
+            "gemini-2.5-flash",
+            generation_config=genai.types.GenerationConfig(**gen_config_kwargs),
         )
 
-        response_text = response.text.strip()
-        logger.info(f"📥 Response received ({len(response_text)} chars)")
+        logger.info(f"📤 LLM çağrısı: {prompt_name} (max_tokens={max_tokens}, json_mode={use_json_mode})")
+        response = model.generate_content(prompt)
 
+        # Güvenli yanıt erişimi
+        if hasattr(response, "text") and response.text:
+            response_text = response.text.strip()
+        elif response.candidates:
+            parts = response.candidates[0].content.parts
+            response_text = "".join(p.text for p in parts if hasattr(p, "text")).strip()
+        else:
+            raise Exception("Gemini boş yanıt döndürdü")
+
+        logger.info(f"📥 Yanıt alındı ({len(response_text)} karakter)")
         return response_text
 
     except Exception as e:
-        logger.error(f"❌ LLM call failed: {str(e)}")
+        logger.error(f"❌ LLM çağrısı başarısız: {str(e)}")
         raise Exception(f"LLM call failed for {prompt_name}: {str(e)}")
 
 
@@ -183,7 +188,7 @@ def parse_llm_response(
             logger.info(f"✅ Parse successful: {expected_type}")
             return result
         else:
-            logger.error(f"❌ Parse failed for {expected_type}")
+            logger.error(f"❌ Parse failed for {expected_type} — ham yanıt: {repr(response_text)}")
             return None
 
     except Exception as e:
@@ -210,7 +215,13 @@ def analyze_diff_stage1(diff_text: str) -> Optional[Dict[str, Any]]:
         prompt = get_prompt(prompt_name, diff_text=short_diff)
         config = get_prompt_config(prompt_name)
 
-        response = call_llm(prompt, prompt_name, config["max_tokens"])
+        response = call_llm(
+            prompt, prompt_name,
+            config["max_tokens"],
+            config.get("temperature", 0.1),
+            use_json_mode=False,   # kısa özet: serbest metin modu
+        )
+        logger.info(f"🔎 SHORT_SUMMARY ham yanıt ({len(response)} karakter): {repr(response)}")
         result = parse_llm_response(response, "short_summary")
 
         return result
@@ -250,7 +261,7 @@ def analyze_diff_stage2(diff_text: str, review_types: List[str]) -> Dict[str, An
             prompt = get_prompt(prompt_name, diff_text=full_diff)
             config = get_prompt_config(prompt_name)
 
-            response = call_llm(prompt, prompt_name, config["max_tokens"])
+            response = call_llm(prompt, prompt_name, config["max_tokens"], config.get("temperature", 0.1))
             result = parse_llm_response(response, review_type)
 
             if result:

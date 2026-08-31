@@ -1,176 +1,162 @@
-SHORT_SUMMARY = """You are a code review expert. Analyze this code diff ONLY.
+"""
+SecPR-TR — Türkçe, güvenlik odaklı PR analiz prompt'ları.
 
-Return ONLY a valid JSON object, NOTHING else. No explanation, no markdown, no text before or after.
+Gemini 2.5 Flash için optimize edilmiştir.
+Çıktı dili: Türkçe (junior geliştirici dostu, öğretici ton)
+"""
+
+# ── Kısa özet ──────────────────────────────────────────────────────────────
+
+SHORT_SUMMARY = """Aşağıdaki kod değişikliğini (diff) inceleyerek kısa bir özet çıkar.
+
+SADECE geçerli bir JSON nesnesi döndür. Markdown kod bloğu (```), açıklama veya
+JSON dışında HİÇBİR metin YAZMA. Yanıtın ilk karakteri açılış süslü parantez, son karakteri kapanış süslü parantez olmalı.
+
+Kod değişikliği:
+{diff_text}
+
+Dönmen gereken yapı tam olarak bu:
+{{"summary": "değişikliği açıklayan kısa Türkçe cümle", "severity": "low|medium|high", "type": "feature|bugfix|refactor|docs|security"}}
+
+Örnek geçerli yanıt:
+{{"summary": "Null kontrolü eklendi", "severity": "medium", "type": "bugfix"}}
+
+SADECE JSON döndür, başka hiçbir şey yazma:"""
+
+# ── Güvenlik incelemesi ─────────────────────────────────────────────────────
+
+SECURITY_REVIEW = """Sen bir uygulama güvenliği uzmanısın. Aşağıdaki kod diff'ini güvenlik açıkları için incele.
+
+SADECE geçerli bir JSON nesnesi döndür. Markdown veya açıklama YAZMA.
 
 Diff:
 {diff_text}
 
-CRITICAL RULES:
-1. Return ONLY JSON
-2. No markdown code blocks
-3. No explanations
-4. No additional text
-5. Valid JSON syntax required
+Güvenli ise şunu döndür:
+{{"vulnerabilities": [], "has_security_issues": false, "security_level": "safe"}}
 
-Return exactly this JSON structure:
+Sorun varsa tam olarak bu yapıyı döndür (Türkçe yaz):
 {{
-    "summary": "one sentence describing the change",
-    "severity": "low|medium|high",
-    "type": "feature|bugfix|refactor|docs"
+    "vulnerabilities": [
+        {{
+            "file": "dosya.py",
+            "line": 10,
+            "risk": "critical|high|medium|low",
+            "type": "SQL Injection|XSS|Hardcoded Secret|Path Traversal|SSRF|vb",
+            "description": "Güvenlik açığının Türkçe açıklaması — neden tehlikeli?",
+            "recommendation": "Nasıl düzeltilir? Kod örneğiyle göster"
+        }}
+    ],
+    "has_security_issues": true,
+    "security_level": "critical|high|medium|safe"
 }}
 
-Example valid response:
-{{"summary": "Added None check", "severity": "medium", "type": "bugfix"}}
+SADECE JSON döndür:"""
 
-Now analyze and return ONLY JSON:"""
+# ── Hata tespiti ────────────────────────────────────────────────────────────
 
-BUG_DETECTION = """You are a security and code quality expert. Find potential bugs in this code diff.
+BUG_DETECTION = """Sen bir kod kalitesi uzmanısın. Aşağıdaki diff'te potansiyel hataları bul.
 
-Return ONLY a valid JSON object, NOTHING else. No explanation, no markdown.
+SADECE geçerli bir JSON nesnesi döndür. Markdown veya açıklama YAZMA.
 
 Diff:
 {diff_text}
 
-CRITICAL RULES:
-1. Return ONLY JSON
-2. No markdown code blocks (no ```json)
-3. No explanations
-4. If no bugs: return {{"issues": [], "has_bugs": false, "overall_risk": "low"}}
-5. Valid JSON syntax required
+Hata yoksa:
+{{"issues": [], "has_bugs": false, "overall_risk": "low"}}
 
-Return exactly this structure:
+Hata varsa (Türkçe yaz):
 {{
     "issues": [
         {{
-            "file": "filename.py",
+            "file": "dosya.py",
             "line": 10,
             "severity": "high|medium|low",
-            "description": "brief bug description",
-            "suggestion": "how to fix"
+            "description": "Hatanın Türkçe açıklaması",
+            "suggestion": "Düzeltme önerisi"
         }}
     ],
-    "has_bugs": true|false,
+    "has_bugs": true,
     "overall_risk": "critical|high|medium|low"
 }}
 
-Example with bugs:
-{{"issues": [{{"file": "auth.py", "line": 5, "severity": "high", "description": "Unvalidated user input", "suggestion": "Add input validation"}}], "has_bugs": true, "overall_risk": "high"}}
+SADECE JSON döndür:"""
 
-Example without bugs:
-{{"issues": [], "has_bugs": false, "overall_risk": "low"}}
+# ── Performans incelemesi ───────────────────────────────────────────────────
 
-Now analyze and return ONLY JSON:"""
+PERFORMANCE_REVIEW = """Sen bir performans optimizasyon uzmanısın. Bu diff'i performans sorunları için incele.
 
-PERFORMANCE_REVIEW = """You are a performance optimization expert. Review this code diff for performance issues.
-
-Return ONLY a valid JSON object, NOTHING else.
+SADECE geçerli bir JSON nesnesi döndür. Markdown veya açıklama YAZMA.
 
 Diff:
 {diff_text}
 
-CRITICAL RULES:
-1. Return ONLY JSON
-2. No markdown, no explanations
-3. If no issues: return {{"suggestions": [], "optimization_potential": "low"}}
-4. Keep code snippets SHORT (max 50 chars each)
+Sorun yoksa:
+{{"suggestions": [], "optimization_potential": "low"}}
 
-Return exactly this structure:
+Sorun varsa (Türkçe yaz):
 {{
     "suggestions": [
         {{
-            "file": "filename.py",
+            "file": "dosya.py",
             "line": 10,
-            "issue": "brief issue description",
-            "recommendation": "optimization suggestion"
+            "issue": "Sorunun kısa açıklaması",
+            "recommendation": "Optimizasyon önerisi"
         }}
     ],
     "optimization_potential": "high|medium|low"
 }}
 
-Example:
-{{"suggestions": [{{"file": "utils.py", "line": 10, "issue": "O(n²) nested loop", "recommendation": "Use set instead"}}], "optimization_potential": "high"}}
+SADECE JSON döndür:"""
 
-Now analyze and return ONLY JSON:"""
-
-SECURITY_REVIEW = """You are a security expert. Check this code diff for security vulnerabilities.
-
-Return ONLY a valid JSON object, NOTHING else.
-
-Diff:
-{diff_text}
-
-CRITICAL RULES:
-1. Return ONLY JSON
-2. No markdown, no explanations
-3. If safe: return {{"vulnerabilities": [], "has_security_issues": false, "security_level": "safe"}}
-4. Keep descriptions SHORT
-
-Return exactly this structure:
-{{
-    "vulnerabilities": [
-        {{
-            "file": "filename.py",
-            "line": 10,
-            "risk": "critical|high|medium|low",
-            "type": "SQL injection|XSS|auth bypass|etc",
-            "recommendation": "fix suggestion"
-        }}
-    ],
-    "has_security_issues": true|false,
-    "security_level": "critical|high|medium|safe"
-}}
-
-Example:
-{{"vulnerabilities": [{{"file": "db.py", "line": 8, "risk": "high", "type": "SQL injection", "recommendation": "Use parameterized queries"}}], "has_security_issues": true, "security_level": "high"}}
-
-Now analyze and return ONLY JSON:"""
-
-# ============= PROMPT CONFIG =============
+# ── Prompt konfigürasyonu ───────────────────────────────────────────────────
 
 PROMPT_CONFIG = {
     "SHORT_SUMMARY": {
-        "description": "Short summary of changes",
-        "max_tokens": 150,
-        "temperature": 0.2,  # Daha düşük = daha deterministic
-        "fields_needed": ["diff_text"],
-    },
-    "BUG_DETECTION": {
-        "description": "Bug detection",
-        "max_tokens": 500,
-        "temperature": 0.3,
-        "fields_needed": ["diff_text"],
-    },
-    "PERFORMANCE_REVIEW": {
-        "description": "Performance review",
-        "max_tokens": 400,
-        "temperature": 0.2,
+        "description": "Değişiklik özeti",
+        # Gemini 2.5 Flash "thinking" modelidir — bu eski (deprecated)
+        # google-generativeai SDK'sında thinking_budget kapatılamıyor,
+        # yani model max_output_tokens'ın bir kısmını görünmeyen "düşünme"
+        # token'larına harcıyor. 300 çok düşüktü: yanıt gerçek JSON'a
+        # başlamadan kesiliyordu (bkz. 29 karakterlik kırpılmış yanıt).
+        "max_tokens": 2048,
+        "temperature": 0.1,
         "fields_needed": ["diff_text"],
     },
     "SECURITY_REVIEW": {
-        "description": "Security review",
-        "max_tokens": 400,
-        "temperature": 0.2,
+        "description": "Güvenlik incelemesi",
+        "max_tokens": 1000,
+        "temperature": 0.1,  # Güvenlik analizi için çok düşük sıcaklık
+        "fields_needed": ["diff_text"],
+    },
+    "BUG_DETECTION": {
+        "description": "Hata tespiti",
+        "max_tokens": 800,
+        "temperature": 0.1,
+        "fields_needed": ["diff_text"],
+    },
+    "PERFORMANCE_REVIEW": {
+        "description": "Performans incelemesi",
+        "max_tokens": 600,
+        "temperature": 0.1,
         "fields_needed": ["diff_text"],
     },
 }
 
 
 def get_prompt(prompt_name: str, **kwargs) -> str:
-    """Get prompt template and fill variables"""
-    if prompt_name == "SHORT_SUMMARY":
-        template = SHORT_SUMMARY
-    elif prompt_name == "BUG_DETECTION":
-        template = BUG_DETECTION
-    elif prompt_name == "PERFORMANCE_REVIEW":
-        template = PERFORMANCE_REVIEW
-    elif prompt_name == "SECURITY_REVIEW":
-        template = SECURITY_REVIEW
-    else:
-        raise ValueError(f"Unknown prompt: {prompt_name}")
-
-    return template.format(**kwargs)
+    """Prompt şablonunu doldur ve döndür."""
+    templates = {
+        "SHORT_SUMMARY": SHORT_SUMMARY,
+        "SECURITY_REVIEW": SECURITY_REVIEW,
+        "BUG_DETECTION": BUG_DETECTION,
+        "PERFORMANCE_REVIEW": PERFORMANCE_REVIEW,
+    }
+    if prompt_name not in templates:
+        raise ValueError(f"Bilinmeyen prompt: {prompt_name}")
+    return templates[prompt_name].format(**kwargs)
 
 
 def get_prompt_config(prompt_name: str) -> dict:
-    """Get prompt configuration"""
-    return PROMPT_CONFIG.get(prompt_name, {})
+    """Prompt konfigürasyonunu döndür."""
+    return PROMPT_CONFIG.get(prompt_name, {"max_tokens": 500, "temperature": 0.1})

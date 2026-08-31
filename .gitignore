@@ -50,3 +50,8 @@ logs/
 *.tmp
 *.bak
 .cache/
+
+# GitHub App private key — kesinlikle repoya girmemeli
+*.pem
+*.private-key.pem
+secrets/
