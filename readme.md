@@ -177,6 +177,7 @@ pytest tests/ --cov=app --cov-report=html
 - **Faz 1** — Gerçek GitHub App'e dönüşüm (JWT → installation token) ✅
 - **Faz 2b** — Çok kiracılı veri katmanı (PostgreSQL) ✅
 - **Faz 2c** — Installation bazlı Semgrep ruleset ayarları ✅
-- **Faz 3** — Ücretsiz Marketplace listing — hazırlık tamam, submit adımları:
-  [docs/marketplace-submit-adimlari.md](docs/marketplace-submit-adimlari.md)
+- **Faz 3** — Ücretsiz Marketplace listing — hazırlık tamam:
+  [deploy (Fly.io + Neon)](docs/deploy-fly-neon.md) ·
+  [submit adımları](docs/marketplace-submit-adimlari.md)
 - **Faz 4+** — Rate limiting, izleme (Sentry), landing page, soft launch — planlı

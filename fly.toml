@@ -1,0 +1,39 @@
+# SecPR-TR — Fly.io deploy yapılandırması.
+#
+# İlk kurulum: `fly launch --no-deploy` bu dosyayı üretir/günceller;
+# aşağıdaki değerler elle ayarlanmıştır. `app` adını `fly launch` kendi
+# benzersiz adıyla değiştirebilir — sorun değil.
+#
+# Secret'lar bu dosyada TUTULMAZ; `fly secrets set` ile ayrı verilir
+# (bkz. docs/deploy-fly-neon.md).
+
+app = "secpr-tr"
+primary_region = "fra"   # Frankfurt — Türkiye'ye en yakın düşük gecikmeli bölge
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8000"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # Webhook servisi her zaman açık olmalı — GitHub 10 sn içinde yanıt bekler,
+  # soğuk başlatma webhook'u timeout'a düşürür.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/health"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+
+[[vm]]
+  # Semgrep taraması 256 MB'de OOM olabiliyor — 512 MB güvenli alt sınır.
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1

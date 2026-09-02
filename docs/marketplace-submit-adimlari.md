@@ -25,22 +25,27 @@ Bunun getirdiği basitleştirmeler:
 
 ## Adım 1 — Uygulamayı public erişilebilir bir yere deploy et
 
-Marketplace listing'i submit etmeden önce webhook URL'sinin çalışıyor olması lazım.
+Marketplace listing'i submit etmeden önce webhook URL'sinin **public ve her
+zaman açık** olması lazım (GitHub 10 sn içinde yanıt bekler; uyuyan servis
+webhook'u timeout'a düşürür).
 
-1. Bir hosting seç (Railway en hızlısı). `docker-compose.yml` artık Postgres'i de
-   içeriyor — Railway'de "PostgreSQL" eklentisi ekle, `DATABASE_URL`'i servis
-   otomatik verir.
-2. Environment değişkenleri (Railway → Variables):
-   - `GEMINI_API_KEY`
-   - `GITHUB_APP_ID`
-   - `GITHUB_APP_PRIVATE_KEY` — `.pem` içeriğini **tek satıra** çevirip yapıştır:
-     `python -c "print(open('secpr-tr.2026-08-30.private-key.pem').read().replace(chr(10),'\\n'))"`
-   - `GITHUB_WEBHOOK_SECRET`
-   - `DATABASE_URL` (Postgres eklentisinden)
-3. Deploy sonrası `https://<domain>/health` → `{"status":"ok","app":"SecPR-TR"}` görmelisin.
-4. **GitHub App ayarlarında Webhook URL'yi bu domain'e güncelle:**
+**Önerilen kurulum: Fly.io (uygulama) + Neon (PostgreSQL) — fiilen ~$0.**
+Tam adım adım rehber: **[docs/deploy-fly-neon.md](deploy-fly-neon.md)**
+
+Özet:
+1. Neon'da Postgres projesi aç, connection string'i al, önekini
+   `postgresql+psycopg://...?sslmode=require` yap.
+2. Repo kökünde `fly launch --no-deploy --copy-config` (repoda `fly.toml` hazır).
+3. `fly secrets set` ile: `GEMINI_API_KEY`, `GITHUB_APP_ID`,
+   `GITHUB_APP_PRIVATE_KEY` (tek satır), `GITHUB_WEBHOOK_SECRET`, `DATABASE_URL`.
+4. `fly deploy` → `https://<app>.fly.dev/health` → `{"status":"ok","app":"SecPR-TR"}`.
+5. **GitHub App ayarlarında Webhook URL'yi güncelle:**
    GitHub → Settings → Developer settings → GitHub Apps → SecPR-TR → General →
-   **Webhook URL** = `https://<domain>/webhook`.
+   **Webhook URL** = `https://<app>.fly.dev/webhook`.
+
+> Yerel Docker ile denemek için `docker-compose up -d` (Postgres dahil) hâlâ
+> çalışır — ama webhook'ları dışarıdan almak için `scripts/smee_proxy.py`
+> gerekir. Marketplace testi için gerçek bir public deploy şart.
 
 ---
 
