@@ -14,6 +14,7 @@ sys.path.insert(0, project_root)
 from app.reviewer import review_diff, truncate_diff
 
 
+@pytest.mark.network
 class TestLocalReview:
     """Local review endpoint testleri"""
 

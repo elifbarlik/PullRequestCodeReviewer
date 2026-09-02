@@ -1,0 +1,13 @@
+# Tüm metin dosyaları depoda ve çalışma kopyasında LF ile tutulur.
+# Windows/Linux karışık ortamda "her dosya değişmiş görünüyor" sorununu önler.
+* text=auto eol=lf
+
+# İkili dosyalar dönüşümden muaf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.pem binary

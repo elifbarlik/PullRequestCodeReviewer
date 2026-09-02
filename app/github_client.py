@@ -1,133 +1,309 @@
-import requests
-from typing import Optional, Dict, Any
+"""
+GitHub App authentication ve API client modülü.
+
+PAT (Personal Access Token) yerine GitHub App akışını kullanır:
+  1. Uygulama özel anahtarıyla RS256 JWT üretir  (10 dk geçerli)
+  2. JWT ile GitHub'dan installation access token alır (1 saat geçerli)
+  3. Tüm API çağrıları installation token ile yapılır
+
+Bu sayede her kullanıcı kendi PAT'ını vermek zorunda kalmaz;
+uygulama, kurulduğu hesap/organizasyon adına hareket eder.
+"""
+
 import os
+import time
+import logging
+from typing import Optional, Dict, Any
+
+import jwt          # PyJWT — RS256 imzalama
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
 
-class GitHubClient:
-    """GitHub API ile PR diff'i ve comment işlemleri için client"""
+# -------------------------------------------------------------------
+# Sabitler
+# -------------------------------------------------------------------
+GITHUB_API_BASE = "https://api.github.com"
+JWT_EXPIRY_SECONDS = 540          # 9 dk — GitHub maks 10 dk izin verir
+TOKEN_REFRESH_BUFFER_SECONDS = 60  # Token süresi dolmaya 60 sn kala yenile
 
-    def __init__(self, token: Optional[str] = None):
+
+# -------------------------------------------------------------------
+# Yardımcı: Private key yükleme
+# -------------------------------------------------------------------
+
+def _load_private_key() -> str:
+    """
+    GitHub App private key'i yükler.
+
+    Öncelik sırası:
+      1. GITHUB_APP_PRIVATE_KEY env değişkeni (tek satır, \\n kaçış karakterli)
+      2. GITHUB_APP_PRIVATE_KEY_PATH env değişkeni (dosya yolu)
+
+    Returns:
+        PEM formatında private key string'i
+
+    Raises:
+        ValueError: Key bulunamazsa
+    """
+    # 1. Önce ortam değişkeninden dene (Railway / Docker deploy için ideal)
+    key_env = os.getenv("GITHUB_APP_PRIVATE_KEY", "")
+    if key_env.strip():
+        # Railway'de satır sonları \\n olarak saklanır — gerçek \n'e çevir
+        return key_env.replace("\\n", "\n")
+
+    # 2. Dosya yolundan dene
+    key_path = os.getenv("GITHUB_APP_PRIVATE_KEY_PATH", "")
+    if key_path and os.path.isfile(key_path):
+        with open(key_path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    raise ValueError(
+        "GitHub App private key bulunamadı. "
+        "GITHUB_APP_PRIVATE_KEY veya GITHUB_APP_PRIVATE_KEY_PATH env değişkenini ayarlayın."
+    )
+
+
+# -------------------------------------------------------------------
+# Yardımcı: JWT üretimi
+# -------------------------------------------------------------------
+
+def _generate_jwt(app_id: str, private_key_pem: str) -> str:
+    """
+    GitHub App JWT'si üretir (RS256 imzalı).
+
+    Args:
+        app_id: GitHub App ID (Settings sayfasındaki sayısal değer)
+        private_key_pem: PEM formatında RSA private key
+
+    Returns:
+        İmzalı JWT string'i
+    """
+    now = int(time.time())
+    payload = {
+        "iat": now - 60,          # issued at — clock skew toleransı için 60 sn geri al
+        "exp": now + JWT_EXPIRY_SECONDS,
+        "iss": app_id,
+    }
+    return jwt.encode(payload, private_key_pem, algorithm="RS256")
+
+
+# -------------------------------------------------------------------
+# Ana client sınıfı
+# -------------------------------------------------------------------
+
+class GitHubAppClient:
+    """
+    GitHub App kimlik doğrulamasıyla çalışan API client.
+
+    Her örnek belirli bir installation'a bağlıdır.
+    Installation access token cache'lenir ve süresi dolmadan önce
+    otomatik olarak yenilenir.
+
+    Kullanım:
+        client = GitHubAppClient(installation_id=12345678)
+        diff = client.get_pr_diff("owner", "repo", 42)
+    """
+
+    def __init__(self, installation_id: int):
         """
-        GitHub client'ı initialize et
-
         Args:
-            token: GitHub Personal Access Token. Eğer None ise, GITHUB_TOKEN env'den alınır
+            installation_id: GitHub App'in kurulu olduğu hesabın/org'un installation ID'si.
+                             Webhook payload'larında `installation.id` olarak gelir.
         """
-        self.token = token or os.getenv("GITHUB_TOKEN")
-        if not self.token:
-            raise ValueError(
-                "GITHUB_TOKEN env değişkeni veya token parametresi gereklidir"
-            )
+        self.installation_id = installation_id
 
-        self.base_url = "https://api.github.com"
-        self.headers = {
-            "Authorization": f"token {self.token}",
-            "Accept": "application/vnd.github.v3+json",
+        # Env değişkenlerinden konfigürasyon oku
+        self.app_id = os.getenv("GITHUB_APP_ID", "")
+        if not self.app_id:
+            raise ValueError("GITHUB_APP_ID env değişkeni ayarlanmamış")
+
+        self._private_key_pem = _load_private_key()
+
+        # Token cache
+        self._access_token: Optional[str] = None
+        self._token_expires_at: float = 0.0
+
+    # ------------------------------------------------------------------
+    # Token yönetimi
+    # ------------------------------------------------------------------
+
+    def _get_access_token(self) -> str:
+        """
+        Installation access token döndürür.
+        Token geçerliyse cache'den, süresi dolmuşsa GitHub'dan taze token alır.
+        """
+        now = time.time()
+        if self._access_token and now < self._token_expires_at - TOKEN_REFRESH_BUFFER_SECONDS:
+            return self._access_token
+
+        logger.info(f"🔑 Installation {self.installation_id} için yeni access token alınıyor...")
+        self._access_token, self._token_expires_at = self._fetch_installation_token()
+        return self._access_token
+
+    def _fetch_installation_token(self) -> tuple[str, float]:
+        """
+        GitHub API'den installation access token alır.
+
+        Returns:
+            (token_string, unix_timestamp_expiry) çifti
+        """
+        jwt_token = _generate_jwt(self.app_id, self._private_key_pem)
+
+        url = f"{GITHUB_API_BASE}/app/installations/{self.installation_id}/access_tokens"
+        headers = {
+            "Authorization": f"Bearer {jwt_token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+
+        response = requests.post(url, headers=headers, timeout=10)
+
+        if response.status_code != 201:
+            logger.error(f"Token alınamadı: {response.status_code} — {response.text}")
+            response.raise_for_status()
+
+        data = response.json()
+        token = data["token"]
+
+        # GitHub ISO 8601 döndürür, unix timestamp'e çevir
+        from datetime import datetime, timezone
+        expires_at_str = data.get("expires_at", "")
+        try:
+            dt = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+            expires_at = dt.timestamp()
+        except (ValueError, AttributeError):
+            # Parse edilemezse 1 saat sonra expiry varsay
+            expires_at = time.time() + 3600
+
+        logger.info(f"✅ Access token alındı, geçerlilik: {expires_at_str}")
+        return token, expires_at
+
+    def _auth_headers(self) -> Dict[str, str]:
+        """Installation access token ile hazır request header'ları döndürür."""
+        return {
+            "Authorization": f"token {self._get_access_token()}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
             "Content-Type": "application/json",
         }
 
+    # ------------------------------------------------------------------
+    # GitHub API işlemleri
+    # ------------------------------------------------------------------
+
     def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
         """
-        PR'dan diff string'i al
+        PR diff'ini string olarak döndürür.
 
         Args:
-            owner: Repository owner (GitHub kullanıcı adı)
+            owner: Repository sahibi (kullanıcı adı veya org)
             repo: Repository adı
             pr_number: Pull Request numarası
 
         Returns:
-            Diff string'i
+            Unified diff string'i
 
         Raises:
             requests.RequestException: API çağrısı başarısız olursa
-            ValueError: Response parse edilemezse
+            ValueError: Diff boş gelirse
         """
-        url = f"{self.base_url}/repos/{owner}/{repo}/pulls/{pr_number}"
-
-        # Diff'i almak için Accept header'ını değiştir
-        headers = self.headers.copy()
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls/{pr_number}"
+        headers = self._auth_headers()
         headers["Accept"] = "application/vnd.github.v3.diff"
 
-        try:
-            response = requests.get(url, headers=headers, timeout=10)
-            response.raise_for_status()
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
 
-            diff_text = response.text
+        diff_text = response.text
+        if not diff_text:
+            raise ValueError(f"PR diff'i boş döndü ({owner}/{repo}#{pr_number})")
 
-            if not diff_text:
-                raise ValueError("PR diff'i boş döndü")
-
-            return diff_text
-
-        except requests.exceptions.RequestException as e:
-            raise requests.RequestException(
-                f"PR diff alınamadı ({owner}/{repo}#{pr_number}): {str(e)}"
-            )
+        return diff_text
 
     def get_pr_files(self, owner: str, repo: str, pr_number: int) -> list:
         """
-        PR'daki değişen dosyaları al
-
-        Args:
-            owner: Repository owner
-            repo: Repository adı
-            pr_number: Pull Request numarası
+        PR'daki değişen dosyaların listesini döndürür.
 
         Returns:
-            Dosya listesi (her dosya: filename, status, additions, deletions vb.)
+            Her dosya için: filename, status, additions, deletions, patch vb.
         """
-        url = f"{self.base_url}/repos/{owner}/{repo}/pulls/{pr_number}/files"
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls/{pr_number}/files"
+        response = requests.get(url, headers=self._auth_headers(), timeout=10)
+        response.raise_for_status()
+        return response.json()
+
+    def get_pr_details(self, owner: str, repo: str, pr_number: int) -> Dict[str, Any]:
+        """
+        PR metadata'sını döndürür (başlık, açıklama, head commit SHA vb.).
+        """
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls/{pr_number}"
+        response = requests.get(url, headers=self._auth_headers(), timeout=10)
+        response.raise_for_status()
+        return response.json()
+
+    def get_file_content(
+        self, owner: str, repo: str, path: str, ref: str
+    ) -> Optional[str]:
+        """
+        Belirli bir ref'teki (commit SHA / branch) dosyanın tam içeriğini
+        döndürür. Semgrep taraması diff hunk'ı değil, gerçek dosya içeriği
+        ister — bu yüzden diff'ten ayrı bir Contents API çağrısı gerekir.
+
+        Args:
+            path: Repo köküne göre dosya yolu (diff'teki gibi)
+            ref: Commit SHA'sı (genelde PR'nin head SHA'sı)
+
+        Returns:
+            Dosya içeriği (UTF-8 metin) veya dosya bulunamadı/binary/
+            dizinse None. Semgrep zaten kaynak kodu taradığı için binary
+            dosyaların atlanması sorun değil.
+        """
+        import base64
+
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/contents/{path}"
+        response = requests.get(
+            url, headers=self._auth_headers(), params={"ref": ref}, timeout=10
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+
+        data = response.json()
+        if isinstance(data, list):
+            # path bir dizin olarak geldi (beklenmez, savunma amaçlı)
+            return None
+        if data.get("encoding") != "base64" or not data.get("content"):
+            return None
 
         try:
-            response = requests.get(url, headers=self.headers, timeout=10)
-            response.raise_for_status()
-
-            return response.json()
-
-        except requests.exceptions.RequestException as e:
-            raise requests.RequestException(
-                f"PR dosyaları alınamadı ({owner}/{repo}#{pr_number}): {str(e)}"
-            )
+            return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
+        except Exception:
+            return None
 
     def post_pr_comment(
         self, owner: str, repo: str, pr_number: int, body: str
     ) -> Dict[str, Any]:
         """
-        PR'e yorum yap
+        PR'e genel bir yorum gönderir (issue comment).
 
         Args:
-            owner: Repository owner
-            repo: Repository adı
-            pr_number: Pull Request numarası
             body: Yorum metni (Markdown desteklenir)
 
         Returns:
-            GitHub API response (comment details)
-
-        Raises:
-            requests.RequestException: API çağrısı başarısız olursa
+            GitHub API yanıtı (comment ID, URL vb.)
         """
-        url = f"{self.base_url}/repos/{owner}/{repo}/issues/{pr_number}/comments"
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues/{pr_number}/comments"
+        response = requests.post(
+            url, headers=self._auth_headers(), json={"body": body}, timeout=10
+        )
+        response.raise_for_status()
+        return response.json()
 
-        payload = {"body": body}
-
-        try:
-            response = requests.post(
-                url, headers=self.headers, json=payload, timeout=10
-            )
-            response.raise_for_status()
-
-            return response.json()
-
-        except requests.exceptions.RequestException as e:
-            raise requests.RequestException(
-                f"PR yorumu gönderilemedii ({owner}/{repo}#{pr_number}): {str(e)}"
-            )
-
-    def post_pr_review_comment(
+    def post_review_comment(
         self,
         owner: str,
         repo: str,
@@ -138,162 +314,63 @@ class GitHubClient:
         body: str,
     ) -> Dict[str, Any]:
         """
-        PR'de specific bir satıra review comment yap (inline comment)
+        PR'de belirli bir satıra inline review yorumu gönderir.
 
         Args:
-            owner: Repository owner
-            repo: Repository adı
-            pr_number: Pull Request numarası
-            commit_id: Commit SHA
-            path: Dosya yolu
-            line: Değiştirilmiş satır numarası
+            commit_id: Head commit SHA'sı
+            path: Dosya yolu (diff'teki gibi)
+            line: Değiştirilen satır numarası
             body: Yorum metni
-
-        Returns:
-            GitHub API response
         """
-        url = f"{self.base_url}/repos/{owner}/{repo}/pulls/{pr_number}/comments"
-
-        payload = {"commit_id": commit_id, "path": path, "line": line, "body": body}
-
-        try:
-            response = requests.post(
-                url, headers=self.headers, json=payload, timeout=10
-            )
-            response.raise_for_status()
-
-            return response.json()
-
-        except requests.exceptions.RequestException as e:
-            raise requests.RequestException(f"Review comment gönderilemedii: {str(e)}")
-
-
-# ============= Test Fonksiyonları =============
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls/{pr_number}/comments"
+        payload = {
+            "commit_id": commit_id,
+            "path": path,
+            "line": line,
+            "body": body,
+            "side": "RIGHT",
+        }
+        response = requests.post(
+            url, headers=self._auth_headers(), json=payload, timeout=10
+        )
+        response.raise_for_status()
+        return response.json()
 
 
-def test_get_pr_diff():
-    """get_pr_diff tests et"""
-    print("=" * 60)
-    print("TEST: get_pr_diff")
-    print("=" * 60)
+# -------------------------------------------------------------------
+# App-level işlemler (installation_id gerektirmez)
+# -------------------------------------------------------------------
 
-    # Kendi repo ve PR numarası ile tests et
-    owner = input("Repository owner girin (örn: username): ").strip()
-    repo = input("Repository adı girin (örn: pr-reviewer): ").strip()
-    pr_number = int(input("PR numarası girin (örn: 1): "))
+class GitHubAppInfo:
+    """
+    JWT seviyesinde (installation bağımsız) GitHub App bilgilerini sorgular.
+    Webhook'larda installation.id alınmadan önce kullanılır.
+    """
 
-    try:
-        client = GitHubClient()
-        diff = client.get_pr_diff(owner, repo, pr_number)
+    def __init__(self):
+        self.app_id = os.getenv("GITHUB_APP_ID", "")
+        if not self.app_id:
+            raise ValueError("GITHUB_APP_ID env değişkeni ayarlanmamış")
+        self._private_key_pem = _load_private_key()
 
-        print(f"\n✅ Başarılı! Diff uzunluğu: {len(diff)} karakter")
-        print("\nDiff preview (ilk 500 karakter):")
-        print("-" * 60)
-        print(diff[:500])
-        print("-" * 60)
+    def _jwt_headers(self) -> Dict[str, str]:
+        jwt_token = _generate_jwt(self.app_id, self._private_key_pem)
+        return {
+            "Authorization": f"Bearer {jwt_token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
 
-        return diff
+    def get_installation(self, installation_id: int) -> Dict[str, Any]:
+        """Belirli bir installation'ın detaylarını döndürür."""
+        url = f"{GITHUB_API_BASE}/app/installations/{installation_id}"
+        response = requests.get(url, headers=self._jwt_headers(), timeout=10)
+        response.raise_for_status()
+        return response.json()
 
-    except Exception as e:
-        print(f"❌ Hata: {str(e)}")
-        return None
-
-
-def test_post_pr_comment():
-    """post_pr_comment tests et"""
-    print("\n" + "=" * 60)
-    print("TEST: post_pr_comment")
-    print("=" * 60)
-
-    owner = input("Repository owner girin: ").strip()
-    repo = input("Repository adı girin: ").strip()
-    pr_number = int(input("PR numarası girin: "))
-
-    # Test comment
-    test_body = """## 🤖 PR Code Reviewer - Test Comment
-
-Bu bir tests yorumudur. Eğer bu mesajı görüyorsanız, GitHub API entegrasyonu çalışıyor!
-
-**Test detayları:**
-- ✅ Token geçerli
-- ✅ API çağrısı başarılı
-- ✅ Comment postu çalışıyor
-
----
-*Otomatik olarak oluşturuldu*
-"""
-
-    try:
-        client = GitHubClient()
-        response = client.post_pr_comment(owner, repo, pr_number, test_body)
-
-        print(f"\n✅ Başarılı! Comment ID: {response.get('id')}")
-        print(f"Comment URL: {response.get('html_url')}")
-
-        return response
-
-    except Exception as e:
-        print(f"❌ Hata: {str(e)}")
-        return None
-
-
-def test_get_pr_files():
-    """get_pr_files tests et"""
-    print("\n" + "=" * 60)
-    print("TEST: get_pr_files")
-    print("=" * 60)
-
-    owner = input("Repository owner girin: ").strip()
-    repo = input("Repository adı girin: ").strip()
-    pr_number = int(input("PR numarası girin: "))
-
-    try:
-        client = GitHubClient()
-        files = client.get_pr_files(owner, repo, pr_number)
-
-        print(f"\n✅ Başarılı! {len(files)} dosya bulundu\n")
-
-        for file in files:
-            print(f"📄 {file['filename']}")
-            print(f"   Status: {file['status']}")
-            print(f"   Changes: +{file['additions']} -{file['deletions']}")
-            print()
-
-        return files
-
-    except Exception as e:
-        print(f"❌ Hata: {str(e)}")
-        return None
-
-
-if __name__ == "__main__":
-    print("🚀 GitHub Client Test Suite\n")
-
-    menu = """
-Seçim yapın:
-1. get_pr_diff tests et
-2. post_pr_comment tests et
-3. get_pr_files tests et
-4. Tümünü sırasıyla tests et
-0. Çık
-
-Seçiminiz: """
-
-    while True:
-        choice = input(menu).strip()
-
-        if choice == "1":
-            test_get_pr_diff()
-        elif choice == "2":
-            test_post_pr_comment()
-        elif choice == "3":
-            test_get_pr_files()
-        elif choice == "4":
-            test_get_pr_diff()
-            test_get_pr_files()
-            test_post_pr_comment()
-        elif choice == "0":
-            print("\nÇıkılıyor...")
-            break
-        else:
-            print("❌ Geçersiz seçim")
+    def list_installations(self) -> list:
+        """Bu App'in kurulu olduğu tüm installation'ları listeler."""
+        url = f"{GITHUB_API_BASE}/app/installations"
+        response = requests.get(url, headers=self._jwt_headers(), timeout=10)
+        response.raise_for_status()
+        return response.json()

@@ -25,12 +25,12 @@ jobs:
       with:
         context: .
         push: false
-        tags: pr-code-reviewer:latest
+        tags: secpr-tr:latest
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
     # 4. Test de aynı image'ı kullanarak çalıştır
     - name: Test Docker image
       run: |
-        docker build -t pr-code-reviewer:test .
-        docker run --rm pr-code-reviewer:test pytest tests/ -v || true
+        docker build -t secpr-tr:test .
+        docker run --rm secpr-tr:test pytest tests/ -v || true
