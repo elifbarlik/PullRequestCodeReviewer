@@ -50,7 +50,35 @@ verilir.
 - **`installations`** — her GitHub App kurulumu (`installation_id` → hesap/org, `is_active` soft-delete)
 - **`usage_logs`** — her PR analizi (`installation_id`, diff boyutu, Semgrep durumu, bulgu sayısı, süre — Gemini maliyet kalibrasyonu için)
 - **`findings`** — her güvenlik bulgusu (ileride false-positive oranı metriği için)
-- **`settings`** — repo/installation bazlı ayarlar (şema hazır, Faz 2c'de kullanılacak)
+- **`settings`** — installation bazlı ayarlar: taramanın açık/kapalı olması ve hangi Semgrep ruleset'lerinin çalışacağı (Faz 2c)
+
+### Installation ayarları (Faz 2c)
+
+Her installation için güvenlik taramasını kapatabilir veya çalışacak Semgrep
+ruleset'lerini seçebilirsiniz. Henüz dashboard yok (Faz 5); ayarlar iki endpoint
+ile yönetilir:
+
+```bash
+# Oku (ayar yoksa varsayılan: enabled=true, semgrep_configs=null → p/security-audit + p/secrets)
+curl http://localhost:8000/installations/12345678/settings
+
+# Taramayı kapat
+curl -X PUT http://localhost:8000/installations/12345678/settings \
+  -H "Content-Type: application/json" -d '{"enabled": false}'
+
+# Belirli ruleset'ler (yalnızca izinli olanlar; geçersizler elenir)
+curl -X PUT http://localhost:8000/installations/12345678/settings \
+  -H "Content-Type: application/json" -d '{"semgrep_configs": ["p/python", "p/secrets"]}'
+
+# Varsayılan ruleset'e dön
+curl -X PUT http://localhost:8000/installations/12345678/settings \
+  -H "Content-Type: application/json" -d '{"reset_configs": true}'
+```
+
+İzinli ruleset'ler `semgrep_scanner.ALLOWED_SEMGREP_CONFIGS` içinde tanımlıdır
+(keyfi dosya yolu / URL kabul edilmez — komut enjeksiyonu / SSRF yüzeyi).
+`DATABASE_URL` yoksa bu endpoint'ler `503` döner; tarama her installation için
+varsayılan ayarla çalışır.
 
 **`DATABASE_URL` boşsa veri katmanı tamamen devre dışı kalır** ve uygulama
 (webhook analizi, `/local-review`, testler) DB olmadan çalışır. DB geçici olarak
@@ -112,6 +140,7 @@ python scripts/get_installation_id.py                       # kurulu installatio
 | `POST /webhook` | GitHub App webhook alıcısı (imza doğrulaması zorunlu) |
 | `POST /local-review` | Diff'i doğrudan gönderip analiz ettirme — Semgrep çalıştırılamaz (gerçek dosya erişimi yok), LLM-only güvenlik incelemesine düşer |
 | `GET /stats` | JSON parser başarı oranı + (DB açıksa) kurulum/analiz sayaçları |
+| `GET/PUT /installations/{id}/settings` | Installation bazlı Semgrep ayarları (Faz 2c) — DB açıksa |
 
 ```bash
 curl -X POST http://localhost:8000/local-review \
@@ -125,7 +154,7 @@ curl -X POST http://localhost:8000/local-review \
 pytest tests/ -v
 ```
 
-63 test fonksiyonu. Ağ erişimi yoksa (gerçek Gemini çağrısı) veya `semgrep` CLI
+74 test fonksiyonu. Ağ erişimi yoksa (gerçek Gemini çağrısı) veya `semgrep` CLI
 kurulu değilse ilgili testler otomatik atlanır — bkz. `tests/conftest.py`
 marker'ları (`network`, `requires_semgrep`). Veri katmanı testleri SQLite
 in-memory kullanır, Postgres gerektirmez.
@@ -141,5 +170,6 @@ pytest tests/ --cov=app --cov-report=html
 - **Faz 0** — Konumlandırma (Türkçe + güvenlik + hibrit mimari) ✅
 - **Faz 1** — Gerçek GitHub App'e dönüşüm (JWT → installation token) ✅
 - **Faz 2b** — Çok kiracılı veri katmanı (PostgreSQL) ✅
-- **Faz 2c** — Repo bazlı Semgrep ruleset ayarları — planlı
-- **Faz 3+** — Marketplace listing, rate limiting, izleme, landing page — planlı
+- **Faz 2c** — Installation bazlı Semgrep ruleset ayarları ✅
+- **Faz 3** — Ücretsiz marketplace listing — sıradaki
+- **Faz 4+** — Rate limiting, izleme (Sentry), landing page, soft launch — planlı

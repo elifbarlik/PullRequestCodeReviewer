@@ -38,6 +38,44 @@ _SEVERITY_MAP = {
 
 SEMGREP_TIMEOUT_SECONDS = 120
 
+# Faz 2c: installation başına seçilebilen ruleset'ler. Sadece Semgrep
+# Registry'nin "p/..." kısayolları — keyfi dosya yolu / URL kabul edilmez
+# (kullanıcı kontrollü config = komut enjeksiyonu / SSRF yüzeyi).
+ALLOWED_SEMGREP_CONFIGS = {
+    "p/security-audit",
+    "p/secrets",
+    "p/owasp-top-ten",
+    "p/python",
+    "p/javascript",
+    "p/typescript",
+    "p/golang",
+    "p/java",
+    "p/ci",
+    "p/default",
+    "p/command-injection",
+    "p/sql-injection",
+    "p/xss",
+}
+
+
+def validate_configs(configs: Optional[List[str]]) -> List[str]:
+    """
+    Kullanıcıdan gelen ruleset listesini ALLOWED_SEMGREP_CONFIGS'e göre
+    filtreler. Geçersiz/boş sonuç → DEFAULT_SEMGREP_CONFIGS.
+
+    Bu fonksiyon hem yazma yolunda (ayar kaydedilmeden önce) hem okuma
+    yolunda (tarama başlamadan önce) çağrılır — defansif katman.
+    """
+    if not configs:
+        return list(DEFAULT_SEMGREP_CONFIGS)
+    valid = [c for c in configs if c in ALLOWED_SEMGREP_CONFIGS]
+    if not valid:
+        logger.warning(
+            f"⚠️  Geçerli Semgrep config yok ({configs!r}), varsayılana dönülüyor"
+        )
+        return list(DEFAULT_SEMGREP_CONFIGS)
+    return valid
+
 
 class SemgrepNotAvailable(Exception):
     """Semgrep CLI PATH'te bulunamadığında fırlatılır."""

@@ -12,7 +12,13 @@ import textwrap
 
 import pytest
 
-from app.semgrep_scanner import run_semgrep, scan_diff, SemgrepNotAvailable
+from app.semgrep_scanner import (
+    run_semgrep,
+    scan_diff,
+    validate_configs,
+    SemgrepNotAvailable,
+    DEFAULT_SEMGREP_CONFIGS,
+)
 from app import semgrep_scanner
 
 
@@ -124,3 +130,21 @@ class TestSemgrepNotAvailable:
         monkeypatch.setattr(semgrep_scanner.shutil, "which", lambda name: None)
         with pytest.raises(SemgrepNotAvailable):
             run_semgrep({"a.py": "x = 1"})
+
+
+class TestValidateConfigs:
+    def test_none_returns_default(self):
+        assert validate_configs(None) == list(DEFAULT_SEMGREP_CONFIGS)
+
+    def test_empty_returns_default(self):
+        assert validate_configs([]) == list(DEFAULT_SEMGREP_CONFIGS)
+
+    def test_keeps_only_allowed(self):
+        result = validate_configs(["p/secrets", "p/python", "p/definitely-not-real"])
+        assert result == ["p/secrets", "p/python"]
+
+    def test_all_invalid_falls_back_to_default(self):
+        # Keyfi dosya yolu / URL kabul edilmez — komut enjeksiyonu / SSRF yüzeyi
+        assert validate_configs(["/etc/passwd", "https://evil.test/rules.yml"]) == list(
+            DEFAULT_SEMGREP_CONFIGS
+        )

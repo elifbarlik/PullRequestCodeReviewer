@@ -184,6 +184,95 @@ def record_findings(
 
 
 # -------------------------------------------------------------------
+# Installation ayarları (Faz 2c — repo/installation bazlı Semgrep config)
+# -------------------------------------------------------------------
+
+# DB kapalıyken veya ayar satırı yokken dönülen varsayılan.
+# semgrep_configs=None → semgrep_scanner.DEFAULT_SEMGREP_CONFIGS kullanılır.
+DEFAULT_INSTALLATION_SETTINGS: Dict[str, Any] = {
+    "enabled": True,
+    "semgrep_configs": None,
+}
+
+
+def get_installation_settings(installation_id: int) -> Dict[str, Any]:
+    """
+    Bir installation'ın ayarlarını döndürür.
+
+    DB kapalıysa veya ayar satırı yoksa DEFAULT_INSTALLATION_SETTINGS
+    döner — yani "hiç ayar yapılmamış" durumu her zaman güvenli varsayılana
+    (tarama açık, varsayılan ruleset) düşer.
+
+    Returns:
+        {"enabled": bool, "semgrep_configs": list[str] | None}
+    """
+    if not db_enabled():
+        return dict(DEFAULT_INSTALLATION_SETTINGS)
+    try:
+        from app.models import Settings
+
+        with get_session() as session:
+            row = session.get(Settings, installation_id)
+            if row is None:
+                return dict(DEFAULT_INSTALLATION_SETTINGS)
+            configs = row.semgrep_configs
+            return {
+                "enabled": bool(row.enabled),
+                "semgrep_configs": list(configs) if configs else None,
+            }
+    except Exception as e:
+        logger.error(f"⚠️  get_installation_settings başarısız (varsayılana düşülüyor): {e}")
+        return dict(DEFAULT_INSTALLATION_SETTINGS)
+
+
+def set_installation_settings(
+    installation_id: int,
+    enabled: Optional[bool] = None,
+    semgrep_configs: Optional[List[str]] = None,
+    _clear_configs: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """
+    Bir installation'ın ayarlarını oluşturur/günceller (idempotent).
+
+    Args:
+        enabled: verilirse güncellenir; None ise dokunulmaz
+        semgrep_configs: verilirse güncellenir (liste); None + _clear_configs=False
+                         ise dokunulmaz
+        _clear_configs: True ise semgrep_configs açıkça NULL'a çekilir
+                        (yani "varsayılan ruleset'e dön")
+
+    Returns:
+        Güncel ayar dict'i, veya DB kapalı/hata durumunda None.
+    """
+    if not db_enabled():
+        return None
+    try:
+        from app.models import Settings
+
+        with get_session() as session:
+            row = session.get(Settings, installation_id)
+            if row is None:
+                row = Settings(installation_id=installation_id)
+                session.add(row)
+            if enabled is not None:
+                row.enabled = enabled
+            if _clear_configs:
+                row.semgrep_configs = None
+            elif semgrep_configs is not None:
+                row.semgrep_configs = list(semgrep_configs)
+            session.flush()
+            result = {
+                "enabled": bool(row.enabled),
+                "semgrep_configs": list(row.semgrep_configs) if row.semgrep_configs else None,
+            }
+        logger.info(f"🗄️  installation ayarı güncellendi: id={installation_id} {result}")
+        return result
+    except Exception as e:
+        logger.error(f"⚠️  set_installation_settings başarısız (yutuldu): {e}")
+        return None
+
+
+# -------------------------------------------------------------------
 # /stats için okuma yardımcıları
 # -------------------------------------------------------------------
 

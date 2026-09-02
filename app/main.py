@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from app.reviewer import review_diff, truncate_diff, ParseStatistics
 from app.github_client import GitHubAppClient
-from app.semgrep_scanner import scan_diff, SemgrepNotAvailable
+from app.semgrep_scanner import scan_diff, SemgrepNotAvailable, validate_configs
 from app.db import init_db
 from app.repository import (
     upsert_installation,
@@ -29,6 +29,8 @@ from app.repository import (
     record_usage,
     record_findings,
     get_stats_summary,
+    get_installation_settings,
+    set_installation_settings,
 )
 import json
 import hmac
@@ -121,6 +123,18 @@ class ReviewResponse(BaseModel):
     metadata: Optional[dict] = None
 
 
+class InstallationSettingsRequest(BaseModel):
+    """
+    PUT /installations/{id}/settings gövdesi. Alanların hepsi opsiyonel —
+    yalnızca verilenler güncellenir.
+    """
+    enabled: Optional[bool] = None
+    # None + reset_configs=False → dokunulmaz; liste → o ruleset'ler;
+    # reset_configs=True → varsayılan ruleset'e dön (NULL'a çek)
+    semgrep_configs: Optional[List[str]] = None
+    reset_configs: bool = False
+
+
 # -------------------------------------------------------------------
 # Endpoint: sağlık kontrolü
 # -------------------------------------------------------------------
@@ -150,6 +164,58 @@ async def get_stats():
     if db_summary is not None:
         stats["usage"] = db_summary
     return stats
+
+
+# -------------------------------------------------------------------
+# Endpoint: installation ayarları (Faz 2c)
+# -------------------------------------------------------------------
+# Henüz dashboard yok (Faz 5); ayarlar bu iki endpoint ile yönetilir.
+# Erişim kontrolü: DB açık olmalı. Kimlik doğrulama Faz 4'te eklenecek —
+# şimdilik iç/operasyonel kullanım varsayılıyor.
+
+@app.get("/installations/{installation_id}/settings")
+async def read_installation_settings(installation_id: int):
+    """Bir installation'ın Semgrep ayarlarını döndürür (yoksa varsayılan)."""
+    from app.db import db_enabled
+
+    if not db_enabled():
+        raise HTTPException(status_code=503, detail="Veri katmanı devre dışı (DATABASE_URL yok)")
+    return {
+        "installation_id": installation_id,
+        **get_installation_settings(installation_id),
+    }
+
+
+@app.put("/installations/{installation_id}/settings")
+async def update_installation_settings(
+    installation_id: int, body: InstallationSettingsRequest
+):
+    """
+    Installation ayarlarını günceller.
+
+    - enabled=false  → bu installation için güvenlik taraması tamamen atlanır
+    - semgrep_configs → yalnızca izinli ruleset'ler (ALLOWED_SEMGREP_CONFIGS);
+      geçersizler sessizce elenir, hepsi geçersizse varsayılana dönülür
+    - reset_configs=true → varsayılan ruleset'e dön
+    """
+    from app.db import db_enabled
+
+    if not db_enabled():
+        raise HTTPException(status_code=503, detail="Veri katmanı devre dışı (DATABASE_URL yok)")
+
+    validated_configs = None
+    if body.semgrep_configs is not None and not body.reset_configs:
+        validated_configs = validate_configs(body.semgrep_configs)
+
+    result = set_installation_settings(
+        installation_id=installation_id,
+        enabled=body.enabled,
+        semgrep_configs=validated_configs,
+        _clear_configs=body.reset_configs,
+    )
+    if result is None:
+        raise HTTPException(status_code=500, detail="Ayar güncellenemedi")
+    return {"installation_id": installation_id, **result}
 
 
 # -------------------------------------------------------------------
@@ -196,7 +262,12 @@ async def local_review(request: DiffRequest):
 # -------------------------------------------------------------------
 
 def _run_semgrep_for_pr(
-    client: GitHubAppClient, owner: str, repo: str, pr_number: int, diff_text: str
+    client: GitHubAppClient,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    diff_text: str,
+    configs: Optional[List[str]] = None,
 ) -> dict:
     """
     PR'de değişen dosyaların tam içeriğini çekip Semgrep'i çalıştırır.
@@ -237,7 +308,7 @@ def _run_semgrep_for_pr(
             files_content[filename] = content
 
     try:
-        findings = scan_diff(files_content, diff_text)
+        findings = scan_diff(files_content, diff_text, configs=configs)
         return {"status": "ok", "findings": findings}
     except SemgrepNotAvailable as e:
         logger.warning(f"⚠️  Semgrep CLI kurulu değil, güvenlik taraması atlanıyor: {e}")
@@ -283,10 +354,20 @@ async def _run_pr_review(
     diff_to_analyze = truncate_diff(diff_text)
     was_truncated = len(diff_to_analyze) < original_size
 
+    # Faz 2c: installation başına ayarlar — tarama açık mı, hangi ruleset'ler?
+    settings = get_installation_settings(installation_id)
+    review_types = list(review_types)
+    if "security" in review_types and not settings["enabled"]:
+        logger.info(f"⏭️  Güvenlik taraması bu installation için kapalı (id={installation_id})")
+        review_types = [rt for rt in review_types if rt != "security"]
+
     security_scan = None
     if "security" in review_types:
-        logger.info("🔬 Semgrep taraması başlıyor...")
-        security_scan = _run_semgrep_for_pr(client, owner, repo, pr_number, diff_text)
+        semgrep_configs = validate_configs(settings["semgrep_configs"])
+        logger.info(f"🔬 Semgrep taraması başlıyor (config={semgrep_configs})...")
+        security_scan = _run_semgrep_for_pr(
+            client, owner, repo, pr_number, diff_text, configs=semgrep_configs
+        )
         logger.info(f"🔬 Semgrep sonucu: status={security_scan['status']}, "
                     f"bulgu={len(security_scan.get('findings', []))}")
 

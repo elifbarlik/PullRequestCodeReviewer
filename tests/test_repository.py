@@ -136,6 +136,44 @@ class TestUsageAndFindings:
             assert s.query(Finding).count() == 0
 
 
+class TestInstallationSettings:
+    def test_defaults_when_no_row(self, db_session):
+        s = repository.get_installation_settings(555)
+        assert s == {"enabled": True, "semgrep_configs": None}
+
+    def test_set_creates_row_and_returns_current(self, db_session):
+        result = repository.set_installation_settings(
+            555, enabled=False, semgrep_configs=["p/secrets"]
+        )
+        assert result == {"enabled": False, "semgrep_configs": ["p/secrets"]}
+
+        # kalıcı mı?
+        assert repository.get_installation_settings(555) == {
+            "enabled": False,
+            "semgrep_configs": ["p/secrets"],
+        }
+
+    def test_partial_update_leaves_other_field_untouched(self, db_session):
+        repository.set_installation_settings(555, enabled=True, semgrep_configs=["p/python"])
+        # sadece enabled'ı değiştir
+        repository.set_installation_settings(555, enabled=False)
+        s = repository.get_installation_settings(555)
+        assert s["enabled"] is False
+        assert s["semgrep_configs"] == ["p/python"]  # dokunulmadı
+
+    def test_reset_configs_clears_to_none(self, db_session):
+        repository.set_installation_settings(555, semgrep_configs=["p/python", "p/secrets"])
+        repository.set_installation_settings(555, _clear_configs=True)
+        assert repository.get_installation_settings(555)["semgrep_configs"] is None
+
+    def test_disabled_db_returns_defaults_and_noop_write(self, db_disabled):
+        assert repository.get_installation_settings(555) == {
+            "enabled": True,
+            "semgrep_configs": None,
+        }
+        assert repository.set_installation_settings(555, enabled=False) is None
+
+
 class TestStatsSummary:
     def test_summary_counts(self, db_session):
         repository.upsert_installation(1, "a", "User", "all")
@@ -224,3 +262,91 @@ class TestRunPrReviewRegression:
         )
         assert result["status"] == "success"
         assert result["pr_number"] == 3
+
+    def test_settings_disabled_skips_semgrep_entirely(self, db_session, monkeypatch):
+        """
+        Faz 2c: bir installation için enabled=False ise Semgrep hiç
+        çağrılmamalı ve "security" analiz tipinden düşülmeli.
+        """
+        import asyncio
+
+        from app import main, repository
+
+        repository.set_installation_settings(42, enabled=False)
+
+        class FakeClient:
+            def __init__(self, installation_id):
+                pass
+
+            def get_pr_diff(self, *a, **k):
+                return "--- a/x.py\n+++ b/x.py\n@@ -1 +1,2 @@\n x\n+y\n"
+
+            def post_pr_comment(self, *a, **k):
+                return {"id": 1}
+
+        semgrep_calls = {"n": 0}
+
+        def spy_semgrep(*a, **k):
+            semgrep_calls["n"] += 1
+            return {"status": "ok", "findings": []}
+
+        monkeypatch.setattr(main, "GitHubAppClient", FakeClient)
+        monkeypatch.setattr(main, "_run_semgrep_for_pr", spy_semgrep)
+        captured = {}
+        monkeypatch.setattr(
+            main, "review_diff",
+            lambda **k: captured.update(k) or {
+                "status": "success", "analyses": {}, "metadata": {},
+            },
+        )
+
+        asyncio.run(
+            main._run_pr_review(
+                installation_id=42, owner="acme", repo="web", pr_number=9,
+                review_types=["short_summary", "security"],
+            )
+        )
+        assert semgrep_calls["n"] == 0                       # Semgrep hiç çağrılmadı
+        assert "security" not in captured["review_types"]    # security düşürüldü
+        assert captured["security_scan"] is None
+
+    def test_settings_configs_passed_to_semgrep(self, db_session, monkeypatch):
+        """enabled=True + özel ruleset → o config _run_semgrep_for_pr'e geçmeli."""
+        import asyncio
+
+        from app import main, repository
+
+        repository.set_installation_settings(
+            42, enabled=True, semgrep_configs=["p/secrets", "p/python"]
+        )
+
+        class FakeClient:
+            def __init__(self, installation_id):
+                pass
+
+            def get_pr_diff(self, *a, **k):
+                return "--- a/x.py\n+++ b/x.py\n@@ -1 +1,2 @@\n x\n+y\n"
+
+            def post_pr_comment(self, *a, **k):
+                return {"id": 1}
+
+        captured_configs = {}
+
+        def spy_semgrep(client, owner, repo, pr_number, diff_text, configs=None):
+            captured_configs["v"] = configs
+            return {"status": "ok", "findings": []}
+
+        monkeypatch.setattr(main, "GitHubAppClient", FakeClient)
+        monkeypatch.setattr(main, "_run_semgrep_for_pr", spy_semgrep)
+        monkeypatch.setattr(
+            main, "review_diff",
+            lambda **k: {"status": "success", "analyses": {}, "metadata": {}},
+        )
+
+        asyncio.run(
+            main._run_pr_review(
+                installation_id=42, owner="acme", repo="web", pr_number=9,
+                review_types=["short_summary", "security"],
+            )
+        )
+        assert captured_configs["v"] == ["p/secrets", "p/python"]
