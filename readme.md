@@ -1,166 +1,145 @@
-# PR Code Reviewer
+# SecPR-TR
 
-An AI-powered code review tool that automatically analyzes pull requests opened on GitHub. It finds bugs in written code, detects security issues, and provides development suggestions.
+**Türkçe, güvenlik odaklı pull request incelemesi yapan bir GitHub App.**
 
-## Problem
+Bir PR açıldığında veya güncellendiğinde otomatik devreye girer, değişen kodu
+güvenlik açıkları için tarar ve bulguları junior geliştiricinin anlayacağı
+**Türkçe, öğretici** bir yorumla PR'e ekler.
 
-Manual code review is time-consuming and can create consistency issues. In large projects, it becomes difficult to review every pull request in detail, and some bugs may be missed. There is a need for an automated solution, especially for critical issues such as security vulnerabilities and performance problems.
+## Neden var?
 
-## Solution
+AI destekli PR review pazarı kalabalık (CodeRabbit, GitHub Copilot code review,
+Greptile...) ama hepsi İngilizce çıktı verir ve genel amaçlıdır. SecPR-TR dar bir
+boşluğa oturur: **Türkiye'deki takımlar ve junior geliştiriciler için ana dilde,
+güvenlik odaklı** inceleme.
 
-PR Code Reviewer automatically analyzes pull requests using AI technology. It can be used in three different ways:
+## Hibrit mimari — neden salt-LLM değil?
 
-1. **Local Review**: Send code diff directly to the system for analysis
-2. **GitHub Integration**: Automatically fetch pull request from GitHub, review it, and post results as comments
-3. **Webhook Support**: System automatically activates when a PR is opened or updated and performs evaluation
+Sadece LLM'e "bu diff'te güvenlik açığı var mı?" diye sormak, false positive ve
+false negative riski taşır. SecPR-TR bunun yerine işi ikiye böler:
 
-## Key Features
+1. **Semgrep** (deterministik statik analiz) diff'te *değişen satırlarda*
+   bilinen açık pattern'lerini bulur — SQL injection, hardcoded secret, path
+   traversal, SSRF, komut enjeksiyonu vb. Bulgunun *var olup olmadığına* ve
+   *önem derecesine* Semgrep karar verir.
+2. **Gemini** (google-genai) bu bulguları **açıklar** — açık aramaz.
+   Her bulgu için: neden risk, somut olarak nasıl istismar edilir, nasıl
+   düzeltilir (kod örneğiyle). Türkçe ve öğretici tonda.
 
-- **Multiple Analysis Types**: Short summary, bug detection, security review, performance analysis
-- **Two-Stage Analysis**: Quick summary and detailed review stages
-- **Robust JSON Parser**: Reliable JSON parsing with 5 different fallback strategies
-- **Token Management**: Manage token limits with automatic diff truncation
-- **GitHub Webhook Support**: Automatic PR event handling
-- **Parser Statistics**: Success rate tracking and monitoring
+Gemini çağrısı başarısız olsa bile gerçek Semgrep bulguları asla kaybolmaz —
+ham Semgrep mesajıyla raporlanır. Semgrep hiç çalışamazsa (CLI yok, ağ yok, API
+hatası) sonuç **asla "güvenli" denmez**; şeffaf bir "tarama yapılamadı" uyarısı
+verilir.
 
-## Tech Stack
+## Mimari bileşenler
 
-- **Framework**: FastAPI
-- **Server**: Uvicorn
-- **AI Model**: Google Gemini (google-genai)
-- **GitHub Integration**: GitHub App (JWT + installation tokens, requests + PyJWT)
-- **Testing**: Pytest
-- **Containerization**: Docker, Docker Compose
-- **Language**: Python 3.11
+| Modül | Sorumluluk |
+|-------|-----------|
+| `app/semgrep_scanner.py` | Semgrep'i çalıştırır, bulguları PR'de gerçekten değişen satırlarla sınırlar (`diff_utils.parse_added_lines`) |
+| `app/reviewer.py` | Semgrep bulgularını Türkçe açıklamaya çevirir (`explain_security_findings`); `security_scan` verilmezse eski LLM-only `SECURITY_REVIEW`'a düşer; iki aşamalı analiz (özet → detay); token/diff kırpma |
+| `app/json_parser.py` | LLM yanıtını 5 katmanlı fallback ile parse eder (direkt JSON → markdown blok → yaygın hata düzeltme → regex → şablon) |
+| `app/github_client.py` | GitHub App kimlik doğrulama: RS256 JWT → installation access token; PAT kullanılmaz |
+| `app/prompts.py` | Türkçe, junior-dostu prompt şablonları (`SECURITY_EXPLAIN`, `SHORT_SUMMARY`, ...) |
+| `app/db.py` / `app/models.py` / `app/repository.py` | Çok kiracılı veri katmanı: kurulum kayıtları, kullanım logları, güvenlik bulguları (Faz 2b) |
+| `app/main.py` | FastAPI uygulaması + webhook event yönlendirmesi |
 
-## Architecture Notes
+## Veri katmanı (Faz 2b)
 
-The project consists of three main components:
+`DATABASE_URL` tanımlıysa şu tablolar tutulur:
 
-1. **reviewer.py**: Performs analysis in two stages
-   - Stage 1: Quick summary generation (low token usage)
-   - Stage 2: Detailed review (bug detection, security, performance)
+- **`installations`** — her GitHub App kurulumu (`installation_id` → hesap/org, `is_active` soft-delete)
+- **`usage_logs`** — her PR analizi (`installation_id`, diff boyutu, Semgrep durumu, bulgu sayısı, süre — Gemini maliyet kalibrasyonu için)
+- **`findings`** — her güvenlik bulgusu (ileride false-positive oranı metriği için)
+- **`settings`** — repo/installation bazlı ayarlar (şema hazır, Faz 2c'de kullanılacak)
 
-2. **json_parser.py**: Parses AI responses using five different methods
-   - Direct JSON parse
-   - Markdown code block extraction
-   - Common error fixing (single quotes, unquoted keys, trailing commas)
-   - Regex extraction
-   - Fallback template
+**`DATABASE_URL` boşsa veri katmanı tamamen devre dışı kalır** ve uygulama
+(webhook analizi, `/local-review`, testler) DB olmadan çalışır. DB geçici olarak
+düşse bile PR yorumu gönderilmeye devam eder — loglama hataları yutulur.
 
-3. **github_client.py**: Communicates with GitHub API to fetch pull request information and is responsible for writing comments
+## Kurulum
 
-### Analysis Types
+### 1. GitHub App kaydı
 
-The system performs code review from four different perspectives:
-- **Short Summary**: Change summary and importance level
-- **Bug Detection**: Potential bugs and logic issues in written code
-- **Security Review**: Security vulnerabilities and data protection deficiencies
-- **Performance Analysis**: Performance issues and improvement suggestions
+GitHub → Settings → Developer settings → GitHub Apps → New GitHub App:
 
-## Getting Started
+- **Webhook URL**: `https://<alan-adınız>/webhook`
+- **Webhook secret**: rastgele bir değer (`python -c "import secrets; print(secrets.token_hex(32))"`)
+- **İzinler** (minimum): Pull requests → Read & write, Contents → Read-only
+- **Events**: Pull request, Installation, Installation repositories
+- Private key üret ve `.pem` dosyasını indir
 
-### Option 1: Docker Compose (Recommended)
+### 2. Ortam değişkenleri
 
-The easiest and most consistent way to run:
+`.env.example`'ı `.env` olarak kopyalayıp doldurun:
 
-```bash
-# Create .env file
-GITHUB_TOKEN=your_github_token
-GEMINI_API_KEY=your_gemini_api_key
-GITHUB_WEBHOOK_SECRET=your_webhook_secret  # (optional)
-
-# Start the service
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-
-# Stop the service
-docker-compose down
+```
+GEMINI_API_KEY=...
+GITHUB_APP_ID=...
+GITHUB_APP_PRIVATE_KEY_PATH=/path/to/app.pem      # veya GITHUB_APP_PRIVATE_KEY (tek satır)
+GITHUB_WEBHOOK_SECRET=...
+DATABASE_URL=                                      # boş → DB devre dışı; compose otomatik doldurur
 ```
 
-The system will run at `http://localhost:8000`.
-
-### Option 2: Local Development
+### 3. Çalıştırma — Docker Compose (önerilen)
 
 ```bash
-# Install dependencies
+docker-compose up -d          # uygulama + PostgreSQL
+docker-compose logs -f pr-reviewer
+```
+
+`http://localhost:8000` üzerinde çalışır. Postgres otomatik ayağa kalkar ve
+tablolar açılışta oluşturulur.
+
+### 4. Yerel geliştirme
+
+```bash
 pip install -r requirements.txt
-
-# Create .env file
-GITHUB_TOKEN=your_github_token
-GEMINI_API_KEY=your_gemini_api_key
-GITHUB_WEBHOOK_SECRET=your_webhook_secret  # (optional)
-
-# Start the application
 uvicorn app.main:app --reload
 ```
 
-The system will run at `http://localhost:8000`.
+Webhook'ları yerelde test etmek için:
 
-## Environment Variables
-
-You need to define the following environment variables in the `.env` file or system environment:
-
-- `GITHUB_TOKEN`: GitHub Personal Access Token (required to read PRs and write comments)
-- `GEMINI_API_KEY`: Google Gemini API key (required for AI analysis)
-- `GITHUB_WEBHOOK_SECRET`: Used for GitHub webhook signature verification (optional, but recommended for production)
-
-## API Endpoints
-
-**Health Check:**
 ```bash
-curl http://localhost:8000/health
+python scripts/smee_proxy.py https://smee.io/<kanalınız>   # webhook tüneli
+python scripts/get_installation_id.py                       # kurulu installation'ları listele
 ```
 
-**Local Diff Analysis:**
+## API Endpoint'leri
+
+| Endpoint | Açıklama |
+|----------|----------|
+| `GET /health` | Sağlık kontrolü |
+| `POST /webhook` | GitHub App webhook alıcısı (imza doğrulaması zorunlu) |
+| `POST /local-review` | Diff'i doğrudan gönderip analiz ettirme — Semgrep çalıştırılamaz (gerçek dosya erişimi yok), LLM-only güvenlik incelemesine düşer |
+| `GET /stats` | JSON parser başarı oranı + (DB açıksa) kurulum/analiz sayaçları |
+
 ```bash
 curl -X POST http://localhost:8000/local-review \
   -H "Content-Type: application/json" \
-  -d '{
-    "diff_text": "--- a/file.py\n+++ b/file.py\n...",
-    "review_types": ["short_summary", "bug_detection"]
-  }'
+  -d '{"diff_text": "--- a/x.py\n+++ b/x.py\n...", "review_types": ["short_summary", "security"]}'
 ```
 
-**GitHub PR Review:**
-```bash
-curl -X POST http://localhost:8000/github-review \
-  -H "Content-Type: application/json" \
-  -d '{
-    "owner": "username",
-    "repo": "repo-name",
-    "pr_number": 1
-  }'
-```
-
-**Statistics:**
-```bash
-curl http://localhost:8000/stats
-```
-
-## Testing
+## Test
 
 ```bash
-# All tests
 pytest tests/ -v
+```
 
-# Specific test
-pytest tests/test_local_review.py -v
+63 test fonksiyonu. Ağ erişimi yoksa (gerçek Gemini çağrısı) veya `semgrep` CLI
+kurulu değilse ilgili testler otomatik atlanır — bkz. `tests/conftest.py`
+marker'ları (`network`, `requires_semgrep`). Veri katmanı testleri SQLite
+in-memory kullanır, Postgres gerektirmez.
 
-# Coverage
+```bash
 pytest tests/ --cov=app --cov-report=html
 ```
 
-The system has 24 tests and all pass successfully. These cover schema validation, parser robustness, and different code scenarios.
+## Yol haritası durumu
 
-## GitHub Webhook Setup
+`AI_PR_Reviewer_Yol_Haritasi.pdf` içindeki plana göre:
 
-Repository settings → Webhooks → Add webhook
-- **Payload URL**: `https://your-domain/webhook`
-- **Content type**: `application/json`
-- **Events**: Pull requests
-- **Secret**: Your `GITHUB_WEBHOOK_SECRET` value
-
-After the webhook is set up, the system will automatically analyze when a PR is opened or updated and add the results as comments to the PR.
+- **Faz 0** — Konumlandırma (Türkçe + güvenlik + hibrit mimari) ✅
+- **Faz 1** — Gerçek GitHub App'e dönüşüm (JWT → installation token) ✅
+- **Faz 2b** — Çok kiracılı veri katmanı (PostgreSQL) ✅
+- **Faz 2c** — Repo bazlı Semgrep ruleset ayarları — planlı
+- **Faz 3+** — Marketplace listing, rate limiting, izleme, landing page — planlı

@@ -69,6 +69,46 @@ def reset_statistics():
 
 
 @pytest.fixture
+def db_session(monkeypatch):
+    """
+    İzole, in-memory SQLite DB — her test kendi şemasını alır.
+
+    app.db modülünün lazy engine cache'ini bu test için SQLite'a yönlendirir
+    ve DATABASE_URL'i set eder ki repository.db_enabled() True dönsün.
+    Test bitince cache temizlenir.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app import db as db_module
+    from app.models import Base
+
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    TestSession = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
+
+    monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+    db_module._reset_for_tests(engine=engine, session_factory=TestSession)
+
+    try:
+        yield TestSession
+    finally:
+        Base.metadata.drop_all(engine)
+        db_module._reset_for_tests(engine=None, session_factory=None)
+
+
+@pytest.fixture
+def db_disabled(monkeypatch):
+    """DATABASE_URL yok — veri katmanı tamamen devre dışı olmalı."""
+    from app import db as db_module
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    db_module._reset_for_tests(engine=None, session_factory=None)
+    yield
+    db_module._reset_for_tests(engine=None, session_factory=None)
+
+
+@pytest.fixture
 def sample_github_pr():
     """GitHub PR örneği"""
     return {

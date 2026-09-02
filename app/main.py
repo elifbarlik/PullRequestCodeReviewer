@@ -2,25 +2,39 @@
 SecPR-TR — GitHub App ana uygulama modülü.
 
 Webhook event'leri:
-  - pull_request (opened / synchronize)  → güvenlik analizi + PR yorumu
-  - installation (created / deleted)      → kurulum kaydı log'u (Faz 2'de DB'ye yazılacak)
-  - installation_repositories             → repo ekleme/çıkarma log'u
+  - pull_request (opened / synchronize)  → güvenlik analizi + PR yorumu + kullanım logu
+  - installation (created / deleted)      → installations tablosuna kayıt / soft-delete
+  - installation_repositories             → repo ekleme/çıkarma logu
+
+Veri katmanı (Faz 2b) opsiyoneldir: DATABASE_URL yoksa tüm DB işlemleri
+sessizce atlanır (bkz. app/db.py, app/repository.py).
 
 Kimlik doğrulama:
   - Webhook imzası: HMAC SHA-256 (GITHUB_WEBHOOK_SECRET)  — secret zorunlu
   - API çağrıları: JWT → installation access token        — GitHub App flow
 """
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Optional
 from app.reviewer import review_diff, truncate_diff, ParseStatistics
 from app.github_client import GitHubAppClient
 from app.semgrep_scanner import scan_diff, SemgrepNotAvailable
+from app.db import init_db
+from app.repository import (
+    upsert_installation,
+    deactivate_installation,
+    update_installation_repos,
+    record_usage,
+    record_findings,
+    get_stats_summary,
+)
 import json
 import hmac
 import hashlib
 import os
+import time
 from dotenv import load_dotenv
 import logging
 
@@ -30,7 +44,22 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="SecPR-TR", version="0.3.0")
+@asynccontextmanager
+async def _lifespan(_app: "FastAPI"):
+    """
+    Uygulama açılışında DB tablolarını hazırla. DATABASE_URL yoksa
+    init_db() sessizce False döner — uygulama DB'siz çalışmaya devam eder
+    (bkz. app/db.py tasarım notu).
+    """
+    try:
+        init_db()
+    except Exception as e:
+        # DB kurulumu patlasa bile servis ayağa kalkmalı — veri katmanı opsiyonel.
+        logger.error(f"⚠️  init_db başarısız (DB'siz devam ediliyor): {e}")
+    yield
+
+
+app = FastAPI(title="SecPR-TR", version="0.3.0", lifespan=_lifespan)
 
 
 # -------------------------------------------------------------------
@@ -108,13 +137,19 @@ async def health_check():
 
 @app.get("/stats")
 async def get_stats():
-    """JSON parser istatistiklerini döndürür"""
-    return {
-        "total_attempts": ParseStatistics.total_attempts,
-        "successful": ParseStatistics.successful_parses,
-        "failed": ParseStatistics.failed_parses,
-        "success_rate": f"{ParseStatistics.get_success_rate():.1f}%",
+    """JSON parser istatistikleri + (DB açıksa) kurulum/analiz sayaçları."""
+    stats = {
+        "parser": {
+            "total_attempts": ParseStatistics.total_attempts,
+            "successful": ParseStatistics.successful_parses,
+            "failed": ParseStatistics.failed_parses,
+            "success_rate": f"{ParseStatistics.get_success_rate():.1f}%",
+        }
     }
+    db_summary = get_stats_summary()
+    if db_summary is not None:
+        stats["usage"] = db_summary
+    return stats
 
 
 # -------------------------------------------------------------------
@@ -233,6 +268,8 @@ async def _run_pr_review(
     if review_types is None:
         review_types = ["short_summary", "security"]
 
+    started_at = time.monotonic()
+
     # Installation'a özgü client — kendi installation token'ını yönetir
     client = GitHubAppClient(installation_id=installation_id)
 
@@ -265,6 +302,36 @@ async def _run_pr_review(
 
     logger.info("💬 PR'e yorum gönderiliyor...")
     client.post_pr_comment(owner=owner, repo=repo, pr_number=pr_number, body=comment_body)
+
+    # ── Kullanım loglama (Faz 2b) ────────────────────────────────────
+    # try/except repository.py'de zaten var, ama süre hesabı ve None
+    # güvenliği için burada da savunmacı davranıyoruz — loglama hiçbir
+    # koşulda PR yorumunu geçersiz kılmamalı.
+    try:
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        semgrep_status = security_scan.get("status") if security_scan else None
+        finding_count = len(security_scan.get("findings", [])) if security_scan else 0
+        usage_log_id = record_usage(
+            installation_id=installation_id,
+            owner=owner,
+            repo=repo,
+            pr_number=pr_number,
+            review_types=review_types,
+            diff_size=original_size,
+            was_truncated=was_truncated,
+            semgrep_status=semgrep_status,
+            finding_count=finding_count,
+            parse_success=(result["status"] == "success"),
+            duration_ms=duration_ms,
+        )
+        if security_scan and security_scan.get("status") == "ok":
+            record_findings(
+                usage_log_id=usage_log_id,
+                installation_id=installation_id,
+                findings=security_scan.get("findings", []),
+            )
+    except Exception as e:
+        logger.error(f"⚠️  Kullanım loglama başarısız (yutuldu): {e}")
 
     return {
         "status": "success",
@@ -345,13 +412,19 @@ async def _handle_installation_event(action: str, payload: dict) -> dict:
     account_login = account.get("login", "unknown")
     account_type = account.get("type", "unknown")  # "User" veya "Organization"
 
+    repository_selection = payload.get("installation", {}).get("repository_selection")
+
     if action == "created":
         logger.info(
             f"🎉 Yeni kurulum: installation_id={installation_id} "
             f"hesap={account_login} ({account_type})"
         )
-        # TODO (Faz 2): installations tablosuna kaydet
-        #   db.installations.insert(installation_id, account_login, account_type, ...)
+        upsert_installation(
+            installation_id=installation_id,
+            account_login=account_login,
+            account_type=account_type,
+            repository_selection=repository_selection,
+        )
         return {
             "status": "ok",
             "event": "installation.created",
@@ -364,7 +437,7 @@ async def _handle_installation_event(action: str, payload: dict) -> dict:
             f"🗑️  Kurulum kaldırıldı: installation_id={installation_id} "
             f"hesap={account_login}"
         )
-        # TODO (Faz 2): installations tablosunda is_active=False yap
+        deactivate_installation(installation_id)
         return {
             "status": "ok",
             "event": "installation.deleted",
@@ -391,7 +464,7 @@ async def _handle_installation_repositories_event(action: str, payload: dict) ->
     if repos_removed:
         logger.info(f"➖ Repo çıkarıldı — installation={installation_id}: {repos_removed}")
 
-    # TODO (Faz 2): repo erişim listesini DB'de güncelle
+    update_installation_repos(installation_id, repos_added, repos_removed)
     return {
         "status": "ok",
         "event": f"installation_repositories.{action}",
