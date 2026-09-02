@@ -163,6 +163,12 @@ in-memory kullanır, Postgres gerektirmez.
 pytest tests/ --cov=app --cov-report=html
 ```
 
+## Katkı ve destek
+
+- **Lisans:** [MIT](LICENSE)
+- **Gizlilik:** [PRIVACY.md](PRIVACY.md)
+- **Destek / hata bildirimi:** [SUPPORT.md](SUPPORT.md) → [Issues](https://github.com/elifbarlik/PullRequestCodeReviewer/issues)
+
 ## Yol haritası durumu
 
 `AI_PR_Reviewer_Yol_Haritasi.pdf` içindeki plana göre:
@@ -171,5 +177,6 @@ pytest tests/ --cov=app --cov-report=html
 - **Faz 1** — Gerçek GitHub App'e dönüşüm (JWT → installation token) ✅
 - **Faz 2b** — Çok kiracılı veri katmanı (PostgreSQL) ✅
 - **Faz 2c** — Installation bazlı Semgrep ruleset ayarları ✅
-- **Faz 3** — Ücretsiz marketplace listing — sıradaki
+- **Faz 3** — Ücretsiz Marketplace listing — hazırlık tamam, submit adımları:
+  [docs/marketplace-submit-adimlari.md](docs/marketplace-submit-adimlari.md)
 - **Faz 4+** — Rate limiting, izleme (Sentry), landing page, soft launch — planlı
