@@ -169,14 +169,3 @@ pytest tests/ --cov=app --cov-report=html
 - **Gizlilik:** [PRIVACY.md](PRIVACY.md)
 - **Destek / hata bildirimi:** [SUPPORT.md](SUPPORT.md) → [Issues](https://github.com/elifbarlik/PullRequestCodeReviewer/issues)
 
-## Yol haritası durumu
-
-`AI_PR_Reviewer_Yol_Haritasi.pdf` içindeki plana göre:
-
-- **Faz 0** — Konumlandırma (Türkçe + güvenlik + hibrit mimari) ✅
-- **Faz 1** — Gerçek GitHub App'e dönüşüm (JWT → installation token) ✅
-- **Faz 2b** — Çok kiracılı veri katmanı (PostgreSQL) ✅
-- **Faz 2c** — Installation bazlı Semgrep ruleset ayarları ✅
-- **Faz 3** — Ücretsiz Marketplace listing — hazırlık tamam, submit adımları:
-  [docs/marketplace-submit-adimlari.md](docs/marketplace-submit-adimlari.md)
-- **Faz 4+** — Rate limiting, izleme (Sentry), landing page, soft launch — planlı
