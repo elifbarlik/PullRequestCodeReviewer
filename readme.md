@@ -3,8 +3,9 @@
 **Türkçe, güvenlik odaklı pull request incelemesi yapan bir GitHub App.**
 
 Bir PR açıldığında veya güncellendiğinde otomatik devreye girer, değişen kodu
-güvenlik açıkları için tarar ve bulguları junior geliştiricinin anlayacağı
-**Türkçe, öğretici** bir yorumla PR'e ekler.
+güvenlik açıkları için tarar ve her bulguyu junior geliştiricinin anlayacağı
+**Türkçe, öğretici** bir yorumla **ilgili kod satırına** iliştirir; genel bir
+özet de PR'e review olarak eklenir.
 
 ## Neden var?
 
@@ -37,6 +38,7 @@ verilir.
 |-------|-----------|
 | `app/semgrep_scanner.py` | Semgrep'i çalıştırır, bulguları PR'de gerçekten değişen satırlarla sınırlar (`diff_utils.parse_added_lines`) |
 | `app/reviewer.py` | Semgrep bulgularını Türkçe açıklamaya çevirir (`explain_security_findings`); `security_scan` verilmezse eski LLM-only `SECURITY_REVIEW`'a düşer; iki aşamalı analiz (özet → detay); token/diff kırpma |
+| `app/main.py` → `_build_inline_comments` | Her bulguyu, satırı diff'te varsa GitHub review API'sinin inline yorumuna çevirir; yerleştirilemeyenler özet yoruma düşer. `create_review` tek istekte özet + tüm inline yorumları gönderir; `synchronize`'da `_INLINE_MARKER` ile mükerrer yorum atlanır |
 | `app/json_parser.py` | LLM yanıtını 5 katmanlı fallback ile parse eder (direkt JSON → markdown blok → yaygın hata düzeltme → regex → şablon) |
 | `app/github_client.py` | GitHub App kimlik doğrulama: RS256 JWT → installation access token; PAT kullanılmaz |
 | `app/prompts.py` | Türkçe, junior-dostu prompt şablonları (`SECURITY_EXPLAIN`, `SHORT_SUMMARY`, ...) |
@@ -154,7 +156,7 @@ curl -X POST http://localhost:8000/local-review \
 pytest tests/ -v
 ```
 
-74 test fonksiyonu. Ağ erişimi yoksa (gerçek Gemini çağrısı) veya `semgrep` CLI
+88 test fonksiyonu. Ağ erişimi yoksa (gerçek Gemini çağrısı) veya `semgrep` CLI
 kurulu değilse ilgili testler otomatik atlanır — bkz. `tests/conftest.py`
 marker'ları (`network`, `requires_semgrep`). Veri katmanı testleri SQLite
 in-memory kullanır, Postgres gerektirmez.

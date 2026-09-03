@@ -314,7 +314,10 @@ class GitHubAppClient:
         body: str,
     ) -> Dict[str, Any]:
         """
-        PR'de belirli bir satıra inline review yorumu gönderir.
+        PR'de belirli bir satıra tek bir inline review yorumu gönderir.
+
+        Genelde `create_review` tercih edilir (tek istek, çok yorum);
+        bu metod tekil/özel durumlar için korunuyor.
 
         Args:
             commit_id: Head commit SHA'sı
@@ -332,6 +335,70 @@ class GitHubAppClient:
         }
         response = requests.post(
             url, headers=self._auth_headers(), json=payload, timeout=10
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def create_review(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        body: str,
+        comments: Optional[list] = None,
+        commit_id: Optional[str] = None,
+        event: str = "COMMENT",
+    ) -> Dict[str, Any]:
+        """
+        PR'e tek istekte bir review oluşturur — genel bir gövde metni +
+        isteğe bağlı satır-içi (inline) yorumlar.
+
+        Bu, her bulgu için ayrı `post_review_comment` çağırmaktan iyidir:
+        tek review objesi, tek API isteği, rate-limit dostu, PR'de tek bir
+        "SecPR-TR reviewed" bloğu olarak görünür.
+
+        Args:
+            body: Review'ın genel özet metni (Markdown)
+            comments: [{path, line, body}, ...] — her biri diff'te RIGHT
+                      tarafında var olan bir satıra iliştirilecek. Boş/None
+                      ise sadece özet review gönderilir.
+            commit_id: Head commit SHA'sı (verilmezse GitHub PR'nin son
+                       commit'ini kullanır)
+            event: "COMMENT" (onaylamaz/reddetmez), "APPROVE" veya
+                   "REQUEST_CHANGES". Güvenlik aracı için varsayılan COMMENT —
+                   merge'i bloklama kararını insana bırakırız.
+
+        Returns:
+            GitHub review API yanıtı (review id, state vb.)
+        """
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
+        payload: Dict[str, Any] = {"body": body, "event": event}
+        if commit_id:
+            payload["commit_id"] = commit_id
+        if comments:
+            payload["comments"] = [
+                {"path": c["path"], "line": c["line"], "side": "RIGHT", "body": c["body"]}
+                for c in comments
+            ]
+
+        response = requests.post(
+            url, headers=self._auth_headers(), json=payload, timeout=15
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def list_review_comments(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list:
+        """
+        PR'deki tüm inline review yorumlarını döndürür.
+
+        `synchronize` event'inde aynı bulgu için mükerrer yorum atmamak
+        amacıyla kullanılır (idempotency kontrolü).
+        """
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls/{pr_number}/comments"
+        response = requests.get(
+            url, headers=self._auth_headers(), params={"per_page": 100}, timeout=10
         )
         response.raise_for_status()
         return response.json()

@@ -21,6 +21,7 @@ from typing import List, Optional
 from app.reviewer import review_diff, truncate_diff, ParseStatistics
 from app.github_client import GitHubAppClient
 from app.semgrep_scanner import scan_diff, SemgrepNotAvailable, validate_configs
+from app.diff_utils import parse_added_lines
 from app.db import init_db
 from app.repository import (
     upsert_installation,
@@ -327,6 +328,7 @@ async def _run_pr_review(
     review_types: Optional[List[str]] = None,
     account_login: Optional[str] = None,
     account_type: Optional[str] = None,
+    action: str = "opened",
 ) -> dict:
     """
     Verilen PR'yi analiz eder ve sonuçları PR'e yorum olarak gönderir.
@@ -337,6 +339,8 @@ async def _run_pr_review(
         review_types: Hangi analizler çalışsın
         account_login, account_type: Webhook payload'ındaki installation.account —
             installation.created event'i kaçırılmışsa DB kaydını lazy açmak için
+        action: pull_request event action'ı ("opened" | "synchronize") —
+            "synchronize"da mükerrer inline yorum kontrolü yapılır
 
     Returns:
         Sonuç özeti dict'i
@@ -393,10 +397,64 @@ async def _run_pr_review(
     )
     ParseStatistics.record_attempt(result["status"] == "success")
 
-    comment_body = _format_review_comment(result, was_truncated)
+    # ── Yorum gönderme: satır-içi (inline) review + özet ─────────────
+    # Güvenlik bulguları varsa her birini ilgili koda iliştirmeye çalışırız;
+    # satırı diff'te bulunamayanlar özet yoruma geri düşer.
+    head_sha = None
+    try:
+        head_sha = client.get_pr_details(owner, repo, pr_number).get("head", {}).get("sha")
+    except Exception as e:
+        logger.warning(f"⚠️  PR head SHA alınamadı, inline yorum atlanıyor: {e}")
 
-    logger.info("💬 PR'e yorum gönderiliyor...")
-    client.post_pr_comment(owner=owner, repo=repo, pr_number=pr_number, body=comment_body)
+    added_lines = parse_added_lines(diff_text)
+    inline_comments, unplaced = _build_inline_comments(result, added_lines)
+
+    # synchronize'da mükerrer inline yorum atma — aynı (path,line) zaten
+    # SecPR-TR tarafından yorumlanmışsa tekrar gönderme.
+    if inline_comments and action == "synchronize":
+        try:
+            existing = client.list_review_comments(owner, repo, pr_number)
+            already = {
+                (c.get("path"), c.get("line"))
+                for c in existing
+                if _INLINE_MARKER in (c.get("body") or "")
+            }
+            before = len(inline_comments)
+            inline_comments = [
+                c for c in inline_comments if (c["path"], c["line"]) not in already
+            ]
+            if before != len(inline_comments):
+                logger.info(f"↩️  {before - len(inline_comments)} mükerrer inline yorum atlandı")
+        except Exception as e:
+            logger.warning(f"⚠️  Mevcut yorumlar alınamadı, mükerrer kontrol atlandı: {e}")
+
+    summary_body = _format_review_comment(
+        result, was_truncated, inline_count=len(inline_comments), unplaced=unplaced
+    )
+
+    posted_inline = 0
+    if inline_comments and head_sha:
+        try:
+            logger.info(f"💬 {len(inline_comments)} satır-içi yorumla review gönderiliyor...")
+            client.create_review(
+                owner=owner,
+                repo=repo,
+                pr_number=pr_number,
+                body=summary_body,
+                comments=inline_comments,
+                commit_id=head_sha,
+                event="COMMENT",
+            )
+            posted_inline = len(inline_comments)
+        except Exception as e:
+            # Inline review başarısız olursa (örn. satır yine de geçersiz) —
+            # her şeyi özet yoruma koyup düz issue comment olarak gönder.
+            logger.warning(f"⚠️  Inline review başarısız, özet yoruma düşülüyor: {e}")
+            fallback_body = _format_review_comment(result, was_truncated)
+            client.post_pr_comment(owner=owner, repo=repo, pr_number=pr_number, body=fallback_body)
+    else:
+        logger.info("💬 PR'e özet yorum gönderiliyor (inline yorum yok)...")
+        client.post_pr_comment(owner=owner, repo=repo, pr_number=pr_number, body=summary_body)
 
     # ── Kullanım loglama (Faz 2b) ────────────────────────────────────
     # try/except repository.py'de zaten var, ama süre hesabı ve None
@@ -611,15 +669,81 @@ async def _handle_pull_request_event(action: str, payload: dict) -> dict:
         review_types=["short_summary", "security"],
         account_login=account_login,
         account_type=account_type,
+        action=action,
     )
 
 
 # -------------------------------------------------------------------
-# Yorum formatlama
+# Yorum formatlama + satır-içi (inline) yorum üretimi
 # -------------------------------------------------------------------
 
-def _format_review_comment(result: dict, was_truncated: bool = False) -> str:
-    """Review sonuçlarını GitHub PR yorumu olarak formatlar."""
+# Inline yorum gövdelerine gömülen gizli işaret — synchronize'da
+# SecPR-TR'nin kendi eski yorumlarını tanıyıp mükerrer atmamak için.
+_INLINE_MARKER = "<!-- secpr-tr:finding -->"
+
+
+def _build_inline_comments(result: dict, added_lines: dict):
+    """
+    Güvenlik bulgularını GitHub review API'sinin beklediği inline yorum
+    listesine çevirir.
+
+    Bir bulgu ancak dosyası + satırı PR diff'inde (eklenen/değişen satırlar
+    arasında) gerçekten varsa inline yorumlanabilir — GitHub aksi halde
+    tüm review'ı 422 ile reddeder. Yerleştirilemeyen bulgular `unplaced`
+    listesine konur ve özet yoruma düşer.
+
+    Returns:
+        (inline_comments, unplaced)
+        inline_comments: [{path, line, body}, ...]
+        unplaced: [vuln, ...] — diff'te satırı bulunamayan bulgular
+    """
+    analyses = result.get("analyses", {})
+    security = analyses.get("security")
+    if not isinstance(security, dict) or "error" in security:
+        return [], []
+    if not security.get("has_security_issues"):
+        return [], []
+
+    inline_comments = []
+    unplaced = []
+    for vuln in security.get("vulnerabilities", []):
+        path = vuln.get("file")
+        line = vuln.get("line")
+        try:
+            line = int(line)
+        except (TypeError, ValueError):
+            line = None
+
+        if path and line and line in added_lines.get(path, set()):
+            body = (
+                f"{_INLINE_MARKER}\n"
+                f"### 🔒 {vuln.get('type', 'Güvenlik bulgusu')}\n"
+                f"**Risk:** {vuln.get('risk', 'bilinmiyor')}\n\n"
+                f"**Neden riskli?** {vuln.get('description', 'N/A')}\n\n"
+                f"**Nasıl düzeltilir?** {vuln.get('recommendation', 'N/A')}\n\n"
+                f"<sub>Semgrep + Gemini · SecPR-TR</sub>"
+            )
+            inline_comments.append({"path": path, "line": line, "body": body})
+        else:
+            unplaced.append(vuln)
+
+    return inline_comments, unplaced
+
+
+def _format_review_comment(
+    result: dict,
+    was_truncated: bool = False,
+    inline_count: int = 0,
+    unplaced: Optional[list] = None,
+) -> str:
+    """
+    Review sonuçlarını GitHub PR (özet) yorumu olarak formatlar.
+
+    inline_count > 0 ise güvenlik bulguları satır satır işaretlenmiştir;
+    özet bloğu kısalır ve sadece diff'e yerleştirilemeyen (`unplaced`)
+    bulguları tam metniyle listeler.
+    """
+    unplaced = unplaced or []
 
     comment = "## 🔒 SecPR-TR — Güvenlik Analizi\n\n"
 
@@ -647,12 +771,23 @@ def _format_review_comment(result: dict, was_truncated: bool = False) -> str:
                 comment += f"Bu PR için otomatik güvenlik taraması tamamlanamadı: {security['scan_error']}\n"
                 comment += "Lütfen değişiklikleri manuel olarak gözden geçirin.\n\n"
             elif security.get("has_security_issues"):
+                total = len(security.get("vulnerabilities", []))
                 comment += "### 🚨 Güvenlik Bulguları (Semgrep + Gemini)\n"
-                for vuln in security.get("vulnerabilities", []):
-                    comment += f"\n**⚠️ {vuln.get('file', 'bilinmiyor')}:{vuln.get('line', '?')}** — {vuln.get('type', 'bilinmiyor')}\n"
-                    comment += f"- **Risk:** {vuln.get('risk', 'bilinmiyor')}\n"
-                    comment += f"- **Açıklama:** {vuln.get('description', 'N/A')}\n"
-                    comment += f"- **Öneri:** {vuln.get('recommendation', 'N/A')}\n"
+                if inline_count:
+                    comment += (
+                        f"**{inline_count}/{total}** bulgu ilgili satırlara yorum olarak "
+                        f"eklendi (aşağıda ↑ değişiklikler sekmesinde görünür).\n\n"
+                    )
+                # Inline yerleştirilemeyen (veya inline hiç kullanılmadıysa hepsi) bulgular:
+                to_list = unplaced if inline_count else security.get("vulnerabilities", [])
+                if to_list:
+                    if inline_count:
+                        comment += "Satıra yerleştirilemeyen bulgular:\n"
+                    for vuln in to_list:
+                        comment += f"\n**⚠️ {vuln.get('file', 'bilinmiyor')}:{vuln.get('line', '?')}** — {vuln.get('type', 'bilinmiyor')}\n"
+                        comment += f"- **Risk:** {vuln.get('risk', 'bilinmiyor')}\n"
+                        comment += f"- **Açıklama:** {vuln.get('description', 'N/A')}\n"
+                        comment += f"- **Öneri:** {vuln.get('recommendation', 'N/A')}\n"
                 comment += f"\n**Güvenlik Seviyesi:** {security.get('security_level', 'safe')}\n\n"
             else:
                 comment += "### ✅ Güvenlik Kontrolü\n"
