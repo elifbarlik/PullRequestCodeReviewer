@@ -13,6 +13,7 @@ uygulama, kurulduğu hesap/organizasyon adına hareket eder.
 import os
 import time
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any
 
 import jwt          # PyJWT — RS256 imzalama
@@ -232,9 +233,69 @@ class GitHubAppClient:
             Her dosya için: filename, status, additions, deletions, patch vb.
         """
         url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls/{pr_number}/files"
-        response = requests.get(url, headers=self._auth_headers(), timeout=10)
+        response = requests.get(
+            url, headers=self._auth_headers(), params={"per_page": 100}, timeout=10
+        )
         response.raise_for_status()
         return response.json()
+
+    def get_pr_bundle(self, owner: str, repo: str, pr_number: int) -> Dict[str, Any]:
+        """
+        PR analizi için gereken üç bağımsız kaynağı TEK SEFERDE paralel çeker:
+        diff (unified), details (head SHA, başlık vb.), değişen dosya listesi.
+
+        Seri çağrıldığında ~3 tam API round-trip; paralelde ~1. Access token
+        ilk çağrıda alınır ve cache'lenir, o yüzden token round-trip'i
+        paralelliği bozmaz (ilk thread alır, diğerleri cache'den okur —
+        yarış olsa bile en fazla 2 token isteği, sonuç aynı).
+
+        Returns:
+            {"diff": str, "details": dict, "files": list}
+
+        Raises:
+            İçlerden herhangi biri başarısız olursa o exception yükselir
+            (ThreadPoolExecutor future.result() ilk hatayı fırlatır).
+        """
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            f_diff = ex.submit(self.get_pr_diff, owner, repo, pr_number)
+            f_details = ex.submit(self.get_pr_details, owner, repo, pr_number)
+            f_files = ex.submit(self.get_pr_files, owner, repo, pr_number)
+            return {
+                "diff": f_diff.result(),
+                "details": f_details.result(),
+                "files": f_files.result(),
+            }
+
+    def get_files_content(
+        self, owner: str, repo: str, filenames: list, ref: str, max_workers: int = 8
+    ) -> Dict[str, str]:
+        """
+        Birden çok dosyanın içeriğini `ref`'te paralel çeker.
+
+        Seri `get_file_content` döngüsü N dosya için N round-trip; bu
+        yaklaşım hepsini aynı anda ister. İçeriği alınamayan (binary, 404,
+        hata) dosyalar sonuç dict'inde yer almaz — çağıran taraf zaten
+        eksik dosyaya toleranslı (Semgrep sadece elindekini tarar).
+
+        Returns:
+            {filename: content} — yalnızca başarıyla alınanlar
+        """
+        results: Dict[str, str] = {}
+        if not filenames:
+            return results
+
+        def _one(name: str):
+            try:
+                return name, self.get_file_content(owner, repo, name, ref=ref)
+            except Exception as e:  # noqa: BLE001 — tek dosya hatası taramayı durdurmamalı
+                logger.warning(f"⚠️  {name} içeriği alınamadı, atlanıyor: {e}")
+                return name, None
+
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(filenames))) as ex:
+            for name, content in ex.map(_one, filenames):
+                if content is not None:
+                    results[name] = content
+        return results
 
     def get_pr_details(self, owner: str, repo: str, pr_number: int) -> Dict[str, Any]:
         """

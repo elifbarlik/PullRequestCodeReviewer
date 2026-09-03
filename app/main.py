@@ -14,11 +14,18 @@ Kimlik doğrulama:
   - API çağrıları: JWT → installation access token        — GitHub App flow
 """
 
+from collections import OrderedDict
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request
+from concurrent.futures import ThreadPoolExecutor
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Optional
-from app.reviewer import review_diff, truncate_diff, ParseStatistics
+from app.reviewer import (
+    review_diff,
+    truncate_diff,
+    analyze_diff_stage1,
+    ParseStatistics,
+)
 from app.github_client import GitHubAppClient
 from app.semgrep_scanner import scan_diff, SemgrepNotAvailable, validate_configs
 from app.diff_utils import parse_added_lines
@@ -263,16 +270,32 @@ async def local_review(request: DiffRequest):
 # İç yardımcı: PR analizi ve yorum gönderme
 # -------------------------------------------------------------------
 
+# Büyük PR'larda Semgrep'e gönderilecek dosyaları sınırlamak için —
+# bu uzantılar dışındakiler (lock dosyaları, üretilmiş kod, varlıklar)
+# hem Semgrep ruleset kapsamı dışında hem de gereksiz I/O.
+_SCANNABLE_EXTENSIONS = (
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".java", ".rb", ".php",
+    ".c", ".cc", ".cpp", ".cs", ".scala", ".kt", ".rs", ".sh", ".yaml", ".yml",
+)
+_MAX_SCAN_FILES = 60
+
+
 def _run_semgrep_for_pr(
     client: GitHubAppClient,
     owner: str,
     repo: str,
     pr_number: int,
     diff_text: str,
+    head_sha: str,
+    pr_files: List[dict],
     configs: Optional[List[str]] = None,
 ) -> dict:
     """
-    PR'de değişen dosyaların tam içeriğini çekip Semgrep'i çalıştırır.
+    Verilen PR dosya listesinin içeriğini paralel çekip Semgrep'i çalıştırır.
+
+    `head_sha` ve `pr_files` DIŞARIDAN verilir — bu fonksiyon artık kendi
+    GitHub API çağrısını yapmaz (çağıran `get_pr_bundle` ile hepsini bir
+    kez paralel çekiyor).
 
     Dönüş şekli main.py <-> reviewer.py arasındaki sözleşmedir:
       {"status": "ok", "findings": [...]}          — tarama başarıyla çalıştı
@@ -281,37 +304,39 @@ def _run_semgrep_for_pr(
 
     "findings": [] (boş liste) ile status="unavailable"/"error" KESİNLİKLE
     karıştırılmamalı — biri "tarandı, temiz", diğeri "hiç taranamadı" demek.
-    Bu ayrım olmadan bir tarama hatası sessizce "güvenli" görünürdü.
     """
-    try:
-        pr_details = client.get_pr_details(owner, repo, pr_number)
-        head_sha = pr_details.get("head", {}).get("sha")
-        pr_files = client.get_pr_files(owner, repo, pr_number)
-    except Exception as e:
-        logger.error(f"❌ PR dosya listesi alınamadı, Semgrep atlanıyor: {e}")
-        return {"status": "error", "error": f"PR dosyaları alınamadı: {e}"}
-
     if not head_sha:
         return {"status": "error", "error": "PR head SHA'sı bulunamadı"}
 
-    files_content = {}
-    for f in pr_files:
-        if f.get("status") == "removed":
-            continue
-        filename = f.get("filename")
-        if not filename:
-            continue
-        try:
-            content = client.get_file_content(owner, repo, filename, ref=head_sha)
-        except Exception as e:
-            logger.warning(f"⚠️  {filename} içeriği alınamadı, atlanıyor: {e}")
-            continue
-        if content is not None:
-            files_content[filename] = content
+    # Silinen dosyaları ve taranamaz uzantıları ele; büyük PR'da tavan uygula.
+    candidates = [
+        f["filename"]
+        for f in pr_files
+        if f.get("status") != "removed"
+        and f.get("filename")
+        and f["filename"].endswith(_SCANNABLE_EXTENSIONS)
+    ]
+    skipped_for_cap = 0
+    if len(candidates) > _MAX_SCAN_FILES:
+        skipped_for_cap = len(candidates) - _MAX_SCAN_FILES
+        candidates = candidates[:_MAX_SCAN_FILES]
+        logger.warning(
+            f"⚠️  {len(pr_files)} değişen dosya — Semgrep ilk {_MAX_SCAN_FILES} "
+            f"taranabilir dosyayla sınırlandı ({skipped_for_cap} atlandı)"
+        )
+
+    try:
+        files_content = client.get_files_content(owner, repo, candidates, ref=head_sha)
+    except Exception as e:
+        logger.error(f"❌ PR dosya içerikleri alınamadı, Semgrep atlanıyor: {e}")
+        return {"status": "error", "error": f"PR dosyaları alınamadı: {e}"}
 
     try:
         findings = scan_diff(files_content, diff_text, configs=configs)
-        return {"status": "ok", "findings": findings}
+        result = {"status": "ok", "findings": findings}
+        if skipped_for_cap:
+            result["partial"] = f"{skipped_for_cap} dosya boyut sınırı nedeniyle taranmadı"
+        return result
     except SemgrepNotAvailable as e:
         logger.warning(f"⚠️  Semgrep CLI kurulu değil, güvenlik taraması atlanıyor: {e}")
         return {"status": "unavailable", "error": str(e)}
@@ -362,8 +387,14 @@ async def _run_pr_review(
     # Installation'a özgü client — kendi installation token'ını yönetir
     client = GitHubAppClient(installation_id=installation_id)
 
-    logger.info(f"📥 Diff alınıyor: {owner}/{repo}#{pr_number}")
-    diff_text = client.get_pr_diff(owner=owner, repo=repo, pr_number=pr_number)
+    # Faz 4.4: diff + details + files → TEK SEFERDE paralel çek (3 → ~1 round-trip)
+    logger.info(f"📥 PR verisi alınıyor (paralel): {owner}/{repo}#{pr_number}")
+    t_gh_start = time.monotonic()
+    bundle = client.get_pr_bundle(owner=owner, repo=repo, pr_number=pr_number)
+    diff_text = bundle["diff"]
+    head_sha = bundle["details"].get("head", {}).get("sha")
+    pr_files = bundle["files"]
+    t_github_ms = int((time.monotonic() - t_gh_start) * 1000)
 
     if not diff_text or not diff_text.strip():
         raise ValueError("PR diff'i boş")
@@ -379,32 +410,56 @@ async def _run_pr_review(
         logger.info(f"⏭️  Güvenlik taraması bu installation için kapalı (id={installation_id})")
         review_types = [rt for rt in review_types if rt != "security"]
 
-    security_scan = None
-    if "security" in review_types:
-        semgrep_configs = validate_configs(settings["semgrep_configs"])
-        logger.info(f"🔬 Semgrep taraması başlıyor (config={semgrep_configs})...")
-        security_scan = _run_semgrep_for_pr(
-            client, owner, repo, pr_number, diff_text, configs=semgrep_configs
-        )
-        logger.info(f"🔬 Semgrep sonucu: status={security_scan['status']}, "
-                    f"bulgu={len(security_scan.get('findings', []))}")
+    # ── Faz 4.4: Semgrep taraması ile LLM analizini PARALEL çalıştır ──
+    # short_summary Semgrep bulgusuna bağımlı değil (sadece diff'i özetler);
+    # security açıklaması ise Semgrep sonucuna bağımlı, o yüzden review_diff'e
+    # security_scan'i sonradan veriyoruz. İki uzun işi (Semgrep subprocess +
+    # Gemini) aynı anda başlatmak toplam süreyi ~max(a,b)'ye indirir.
+    run_security = "security" in review_types
+    semgrep_configs = validate_configs(settings["semgrep_configs"]) if run_security else None
+    t_scan_start = time.monotonic()
 
-    logger.info(f"🔍 Analiz başlıyor: {review_types}")
+    def _semgrep_task():
+        if not run_security:
+            return None
+        logger.info(f"🔬 Semgrep taraması başlıyor (config={semgrep_configs})...")
+        r = _run_semgrep_for_pr(
+            client, owner, repo, pr_number, diff_text,
+            head_sha=head_sha, pr_files=pr_files, configs=semgrep_configs,
+        )
+        logger.info(f"🔬 Semgrep sonucu: status={r['status']}, "
+                    f"bulgu={len(r.get('findings', []))}")
+        return r
+
+    def _llm_summary_task():
+        # Sadece özet aşamasını çalıştır; detay/security review_diff'te.
+        if "short_summary" not in review_types:
+            return None
+        logger.info("📊 LLM özet analizi (Semgrep'le paralel)...")
+        return analyze_diff_stage1(diff_to_analyze)
+
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_semgrep = ex.submit(_semgrep_task)
+        f_summary = ex.submit(_llm_summary_task)
+        security_scan = f_semgrep.result()
+        stage1_result = f_summary.result()
+    t_semgrep_ms = int((time.monotonic() - t_scan_start) * 1000)
+
+    # LLM detay + security açıklaması (Semgrep sonucu artık hazır)
+    logger.info(f"🔍 Analiz tamamlanıyor: {review_types}")
+    t_gemini_start = time.monotonic()
     result = review_diff(
         diff_text=diff_to_analyze,
         review_types=review_types,
         security_scan=security_scan,
+        precomputed_summary=stage1_result,
     )
+    t_gemini_ms = int((time.monotonic() - t_gemini_start) * 1000)
     ParseStatistics.record_attempt(result["status"] == "success")
 
     # ── Yorum gönderme: satır-içi (inline) review + özet ─────────────
-    # Güvenlik bulguları varsa her birini ilgili koda iliştirmeye çalışırız;
-    # satırı diff'te bulunamayanlar özet yoruma geri düşer.
-    head_sha = None
-    try:
-        head_sha = client.get_pr_details(owner, repo, pr_number).get("head", {}).get("sha")
-    except Exception as e:
-        logger.warning(f"⚠️  PR head SHA alınamadı, inline yorum atlanıyor: {e}")
+    if not head_sha:
+        logger.warning("⚠️  PR head SHA yok — inline yorum atlanacak, özet yoruma düşülecek")
 
     added_lines = parse_added_lines(diff_text)
     inline_comments, unplaced = _build_inline_comments(result, added_lines)
@@ -464,6 +519,13 @@ async def _run_pr_review(
         duration_ms = int((time.monotonic() - started_at) * 1000)
         semgrep_status = security_scan.get("status") if security_scan else None
         finding_count = len(security_scan.get("findings", [])) if security_scan else 0
+        # Faz 4.4: adım kırılımı — darboğazı veriyle görmek için.
+        # DB kolonları Faz 4.3'te (Alembic) eklenecek; şimdilik log satırı.
+        logger.info(
+            f"⏱️  Süre kırılımı {owner}/{repo}#{pr_number}: "
+            f"toplam={duration_ms}ms | github={t_github_ms}ms | "
+            f"semgrep∥özet={t_semgrep_ms}ms | gemini_detay={t_gemini_ms}ms"
+        )
         usage_log_id = record_usage(
             installation_id=installation_id,
             owner=owner,
@@ -495,6 +557,12 @@ async def _run_pr_review(
         "diff_size": original_size,
         "was_truncated": was_truncated,
         "analyses": result["analyses"],
+        "timing_ms": {
+            "total": duration_ms,
+            "github": t_github_ms,
+            "semgrep_and_summary": t_semgrep_ms,
+            "gemini_detail": t_gemini_ms,
+        },
     }
 
 
@@ -502,15 +570,50 @@ async def _run_pr_review(
 # Webhook ana endpoint
 # -------------------------------------------------------------------
 
+# Faz 4.4: son işlenen X-GitHub-Delivery id'leri — GitHub bir webhook'a
+# 10 sn içinde 2xx alamazsa AYNI delivery'yi retry eder. Analiz arka planda
+# çalıştığı için artık 10 sn sorun değil, ama retry yine de gelebilir
+# (ağ gecikmesi). Bu LRU, aynı delivery'nin ikinci kez analiz edilip
+# mükerrer yorum atmasını önler. Process-local; tek instance için yeterli,
+# çok instance'a çıkılırsa Redis/DB'ye taşınır.
+_SEEN_DELIVERIES: "OrderedDict[str, float]" = OrderedDict()
+_SEEN_DELIVERIES_MAX = 500
+
+
+def _already_processed(delivery_id: str) -> bool:
+    """delivery_id daha önce görüldüyse True; görülmediyse kaydeder ve False döner."""
+    if not delivery_id:
+        return False
+    if delivery_id in _SEEN_DELIVERIES:
+        return True
+    _SEEN_DELIVERIES[delivery_id] = time.monotonic()
+    if len(_SEEN_DELIVERIES) > _SEEN_DELIVERIES_MAX:
+        _SEEN_DELIVERIES.popitem(last=False)
+    return False
+
+
+async def _process_pr_event_bg(action: str, payload: dict) -> None:
+    """pull_request analizini arka planda çalıştırır — hataları yutar."""
+    try:
+        await _handle_pull_request_event(action, payload)
+    except Exception as e:
+        logger.error(f"❌ Arka plan PR analizi başarısız: {e}")
+
+
 @app.post("/webhook")
-async def github_webhook(request: Request):
+async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     """
     GitHub App webhook endpoint'i.
 
-    İşlenen event'ler:
-      - pull_request / opened, synchronize  → PR analizi
-      - installation / created, deleted     → kurulum logu (Faz 2: DB kaydı)
-      - installation_repositories           → repo değişikliği logu
+    Faz 4.4: pull_request analizi UZUN sürebilir (Semgrep + 2× Gemini).
+    GitHub webhook'a 10 sn içinde yanıt bekler; aksi halde "failed delivery"
+    işaretleyip retry eder → mükerrer analiz + mükerrer yorum. Bu yüzden:
+      1. İmzayı doğrula
+      2. X-GitHub-Delivery ile mükerrer mü kontrol et
+      3. Analizi BackgroundTasks'e ver, hemen 202 dön
+
+    installation / installation_repositories event'leri hızlı (sadece DB
+    yazımı) — onlar senkron kalır.
     """
     try:
         body = await request.body()
@@ -523,22 +626,28 @@ async def github_webhook(request: Request):
         payload = json.loads(body)
         event_type = request.headers.get("X-GitHub-Event", "")
         action = payload.get("action", "")
+        delivery_id = request.headers.get("X-GitHub-Delivery", "")
 
-        logger.info(f"🔔 Webhook: event={event_type} action={action}")
+        logger.info(f"🔔 Webhook: event={event_type} action={action} delivery={delivery_id}")
 
-        # ── installation event'leri ──────────────────────────────────
+        if _already_processed(delivery_id):
+            logger.info(f"↩️  Mükerrer delivery, atlanıyor: {delivery_id}")
+            return {"status": "duplicate", "delivery": delivery_id}
+
+        # ── installation event'leri (hızlı, senkron) ─────────────────
         if event_type == "installation":
             return await _handle_installation_event(action, payload)
 
-        # ── installation_repositories event'leri ────────────────────
         if event_type == "installation_repositories":
             return await _handle_installation_repositories_event(action, payload)
 
-        # ── pull_request event'leri ──────────────────────────────────
+        # ── pull_request (uzun, arka planda) ─────────────────────────
         if event_type == "pull_request":
-            return await _handle_pull_request_event(action, payload)
+            if action not in ("opened", "synchronize"):
+                return {"status": "ignored", "reason": f"pull_request.{action} analiz tetiklemez"}
+            background_tasks.add_task(_process_pr_event_bg, action, payload)
+            return {"status": "accepted", "event": "pull_request", "action": action}
 
-        # Diğer event'leri görmezden gel
         return {"status": "ignored", "reason": f"'{event_type}' event'i desteklenmiyor"}
 
     except HTTPException:

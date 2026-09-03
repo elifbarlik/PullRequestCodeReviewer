@@ -142,48 +142,9 @@ class TestFormatSummaryWithInline:
 # _run_pr_review — uçtan uca akış (DB kapalı, GitHub mock)
 # =====================================================================
 
-_DIFF = (
-    "--- a/app/db.py\n"
-    "+++ b/app/db.py\n"
-    "@@ -1,2 +1,4 @@\n"
-    " import os\n"
-    "+query = \"SELECT * FROM u WHERE id = \" + uid\n"
-    "+os.system(cmd)\n"
-    " x = 1\n"
-)
-
-
-def _mk_client(recorder):
-    class FakeClient:
-        def __init__(self, installation_id):
-            self.installation_id = installation_id
-
-        def get_pr_diff(self, *a, **k):
-            return _DIFF
-
-        def get_pr_details(self, *a, **k):
-            return {"head": {"sha": "headsha123"}}
-
-        def get_pr_files(self, *a, **k):
-            return []
-
-        def create_review(self, **kw):
-            recorder["create_review"] = kw
-            return {"id": 10, "state": "COMMENTED"}
-
-        def post_pr_comment(self, **kw):
-            recorder.setdefault("post_pr_comment", []).append(kw)
-            return {"id": 1}
-
-        def list_review_comments(self, *a, **k):
-            return recorder.get("existing_comments", [])
-
-    return FakeClient
-
-
 @pytest.fixture
-def _patch_common(monkeypatch, db_disabled):
-    """Semgrep + review_diff'i sabitler; her testte bulgu setini override edeceğiz."""
+def _patch_semgrep(monkeypatch, db_disabled):
+    """Semgrep'i sabitler (bulgu var); review_diff her testte override edilir."""
     monkeypatch.setattr(
         main, "_run_semgrep_for_pr",
         lambda *a, **k: {"status": "ok", "findings": [{"x": 1}]},
@@ -191,26 +152,34 @@ def _patch_common(monkeypatch, db_disabled):
     yield monkeypatch
 
 
+def _patch_review_diff(monkeypatch, vulns=None, has_issues=True):
+    if vulns is None and has_issues:
+        vulns = [{"file": "app/db.py", "line": 2, "risk": "high", "type": "sqli",
+                  "description": "d", "recommendation": "r"}]
+    if has_issues:
+        analyses = _security_result(vulns)["analyses"]
+    else:
+        analyses = {"security": {"has_security_issues": False, "security_level": "safe"}}
+    monkeypatch.setattr(
+        main, "review_diff",
+        lambda **k: {"status": "success", "metadata": {}, "analyses": analyses},
+    )
+
+
 class TestRunPrReviewInlineFlow:
-    def test_inline_review_created_when_finding_on_diff(self, _patch_common, monkeypatch):
-        rec = {}
-        monkeypatch.setattr(main, "GitHubAppClient", _mk_client(rec))
-        monkeypatch.setattr(
-            main, "review_diff",
-            lambda **k: _security_result([
-                {"file": "app/db.py", "line": 2, "risk": "high", "type": "sqli",
-                 "description": "d", "recommendation": "r"},
-            ]) | {"status": "success", "metadata": {}},
-        )
+    def test_inline_review_created_when_finding_on_diff(self, _patch_semgrep, fake_github_client):
+        holder = fake_github_client()
+        _patch_review_diff(_patch_semgrep)
 
         res = asyncio.run(main._run_pr_review(
             installation_id=1, owner="o", repo="r", pr_number=5,
             review_types=["short_summary", "security"], action="opened",
         ))
 
+        rec = holder.client.recorder
         assert res["status"] == "success"
-        assert "create_review" in rec                       # inline review gönderildi
-        assert "post_pr_comment" not in rec                 # düz issue comment YOK
+        assert "create_review" in rec
+        assert "post_pr_comment" not in rec
         cr = rec["create_review"]
         assert cr["commit_id"] == "headsha123"
         assert len(cr["comments"]) == 1
@@ -218,44 +187,31 @@ class TestRunPrReviewInlineFlow:
         assert cr["comments"][0]["line"] == 2
 
     def test_falls_back_to_issue_comment_when_no_placeable_finding(
-        self, _patch_common, monkeypatch
+        self, _patch_semgrep, fake_github_client
     ):
-        rec = {}
-        monkeypatch.setattr(main, "GitHubAppClient", _mk_client(rec))
-        monkeypatch.setattr(
-            main, "review_diff",
-            lambda **k: _security_result([
-                {"file": "app/db.py", "line": 999, "risk": "high", "type": "t",
-                 "description": "d", "recommendation": "r"},
-            ]) | {"status": "success", "metadata": {}},
-        )
+        holder = fake_github_client()
+        _patch_review_diff(_patch_semgrep, vulns=[
+            {"file": "app/db.py", "line": 999, "risk": "high", "type": "t",
+             "description": "d", "recommendation": "r"},
+        ])
 
         asyncio.run(main._run_pr_review(
             installation_id=1, owner="o", repo="r", pr_number=5,
             review_types=["short_summary", "security"], action="opened",
         ))
 
+        rec = holder.client.recorder
         assert "create_review" not in rec
-        assert len(rec["post_pr_comment"]) == 1             # özet issue comment
+        assert len(rec["post_pr_comment"]) == 1
 
     def test_inline_review_exception_falls_back_to_issue_comment(
-        self, _patch_common, monkeypatch
+        self, _patch_semgrep, fake_github_client
     ):
-        rec = {}
-        FakeClient = _mk_client(rec)
-
         def boom(self, **kw):
             raise RuntimeError("422 line not in diff")
 
-        FakeClient.create_review = boom
-        monkeypatch.setattr(main, "GitHubAppClient", FakeClient)
-        monkeypatch.setattr(
-            main, "review_diff",
-            lambda **k: _security_result([
-                {"file": "app/db.py", "line": 2, "risk": "high", "type": "t",
-                 "description": "d", "recommendation": "r"},
-            ]) | {"status": "success", "metadata": {}},
-        )
+        holder = fake_github_client(create_review=boom)
+        _patch_review_diff(_patch_semgrep)
 
         res = asyncio.run(main._run_pr_review(
             installation_id=1, owner="o", repo="r", pr_number=5,
@@ -263,49 +219,45 @@ class TestRunPrReviewInlineFlow:
         ))
 
         assert res["status"] == "success"
-        assert len(rec["post_pr_comment"]) == 1             # güvenli düşüş
+        assert len(holder.client.recorder["post_pr_comment"]) == 1
 
-    def test_synchronize_skips_already_commented_lines(self, _patch_common, monkeypatch):
-        rec = {
-            "existing_comments": [
-                {"path": "app/db.py", "line": 2,
-                 "body": f"{main._INLINE_MARKER}\neski yorum"},
-            ]
-        }
-        monkeypatch.setattr(main, "GitHubAppClient", _mk_client(rec))
-        monkeypatch.setattr(
-            main, "review_diff",
-            lambda **k: _security_result([
-                {"file": "app/db.py", "line": 2, "risk": "high", "type": "t",
-                 "description": "d", "recommendation": "r"},
-            ]) | {"status": "success", "metadata": {}},
-        )
+    def test_synchronize_skips_already_commented_lines(self, _patch_semgrep, fake_github_client):
+        holder = fake_github_client(existing_comments=[
+            {"path": "app/db.py", "line": 2,
+             "body": f"{main._INLINE_MARKER}\neski yorum"},
+        ])
+        _patch_review_diff(_patch_semgrep)
 
         asyncio.run(main._run_pr_review(
             installation_id=1, owner="o", repo="r", pr_number=5,
             review_types=["short_summary", "security"], action="synchronize",
         ))
 
-        # Tek bulgu vardı ve zaten yorumlanmıştı → inline kalmadı → issue comment
+        rec = holder.client.recorder
         assert "create_review" not in rec
         assert len(rec["post_pr_comment"]) == 1
 
-    def test_clean_pr_posts_plain_summary(self, _patch_common, monkeypatch):
-        rec = {}
-        monkeypatch.setattr(main, "GitHubAppClient", _mk_client(rec))
-        monkeypatch.setattr(
-            main, "review_diff",
-            lambda **k: {
-                "status": "success", "metadata": {},
-                "analyses": {"security": {"has_security_issues": False,
-                                          "security_level": "safe"}},
-            },
-        )
+    def test_clean_pr_posts_plain_summary(self, _patch_semgrep, fake_github_client):
+        holder = fake_github_client()
+        _patch_review_diff(_patch_semgrep, has_issues=False)
 
         asyncio.run(main._run_pr_review(
             installation_id=1, owner="o", repo="r", pr_number=5,
             review_types=["short_summary", "security"], action="opened",
         ))
 
+        rec = holder.client.recorder
         assert "create_review" not in rec
         assert len(rec["post_pr_comment"]) == 1
+
+    def test_timing_breakdown_in_result(self, _patch_semgrep, fake_github_client):
+        holder = fake_github_client()
+        _patch_review_diff(_patch_semgrep, has_issues=False)
+
+        res = asyncio.run(main._run_pr_review(
+            installation_id=1, owner="o", repo="r", pr_number=5,
+            review_types=["short_summary", "security"], action="opened",
+        ))
+
+        assert set(res["timing_ms"]) == {"total", "github", "semgrep_and_summary", "gemini_detail"}
+        assert all(isinstance(v, int) for v in res["timing_ms"].values())

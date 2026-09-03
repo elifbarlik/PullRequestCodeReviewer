@@ -32,15 +32,38 @@ ham Semgrep mesajıyla raporlanır. Semgrep hiç çalışamazsa (CLI yok, ağ yo
 hatası) sonuç **asla "güvenli" denmez**; şeffaf bir "tarama yapılamadı" uyarısı
 verilir.
 
+## Hız (Faz 4.4)
+
+PR açma → yorum süresini minimize etmek için:
+
+- **Paralel GitHub çağrıları:** `get_pr_bundle` diff + PR detay + dosya listesini
+  tek seferde (`ThreadPoolExecutor`), `get_files_content` dosya içeriklerini
+  paralel çeker (N seri round-trip → ~1)
+- **Semgrep ∥ LLM özeti:** `short_summary` Semgrep sonucuna bağımlı değil; ikisi
+  aynı anda çalışır, toplam süre ~`max(semgrep, özet)`
+- **Ruleset ön-cache:** tüm izinli Semgrep ruleset'leri Docker image build'inde
+  indirilir — ilk PR'de indirme yok (`Dockerfile`)
+- **Arka plan analiz:** webhook imzayı doğrular, `202` döner, analizi
+  `BackgroundTasks`'te yürütür — GitHub'ın 10 sn timeout'una takılmaz;
+  `X-GitHub-Delivery` LRU'su retry kaynaklı mükerrer analizi engeller
+- **İçeriğe göre timeout:** ≤ 12 dosya → 45 sn, fazlası → 120 sn; `--jobs` ile
+  çok çekirdek, `--max-target-bytes 1MB` ile dev dosyalar atlanır
+- **Dosya tavanı:** > 60 taranabilir dosya varsa Semgrep ilk 60 ile sınırlanır,
+  kalanı özet yoruma "boyut sınırı" notuyla düşer
+
+Yanıt gövdesindeki `timing_ms` (total / github / semgrep_and_summary /
+gemini_detail) ve log satırları darboğazı gösterir.
+
 ## Mimari bileşenler
 
 | Modül | Sorumluluk |
 |-------|-----------|
-| `app/semgrep_scanner.py` | Semgrep'i çalıştırır, bulguları PR'de gerçekten değişen satırlarla sınırlar (`diff_utils.parse_added_lines`) |
-| `app/reviewer.py` | Semgrep bulgularını Türkçe açıklamaya çevirir (`explain_security_findings`); `security_scan` verilmezse eski LLM-only `SECURITY_REVIEW`'a düşer; iki aşamalı analiz (özet → detay); token/diff kırpma |
+| `app/semgrep_scanner.py` | Semgrep'i çalıştırır, bulguları PR'de gerçekten değişen satırlarla sınırlar (`diff_utils.parse_added_lines`); içeriğe göre timeout, `--jobs`, `--max-target-bytes` |
+| `app/reviewer.py` | Semgrep bulgularını Türkçe açıklamaya çevirir (`explain_security_findings`); `security_scan` verilmezse eski LLM-only `SECURITY_REVIEW`'a düşer; iki aşamalı analiz (özet → detay); `precomputed_summary` ile özet dışarıdan paralel verilebilir; token/diff kırpma |
 | `app/main.py` → `_build_inline_comments` | Her bulguyu, satırı diff'te varsa GitHub review API'sinin inline yorumuna çevirir; yerleştirilemeyenler özet yoruma düşer. `create_review` tek istekte özet + tüm inline yorumları gönderir; `synchronize`'da `_INLINE_MARKER` ile mükerrer yorum atlanır |
+| `app/main.py` → `/webhook` | İmza doğrula → `X-GitHub-Delivery` mükerrer kontrolü → `pull_request` analizini `BackgroundTasks`'e ver, `202` dön |
 | `app/json_parser.py` | LLM yanıtını 5 katmanlı fallback ile parse eder (direkt JSON → markdown blok → yaygın hata düzeltme → regex → şablon) |
-| `app/github_client.py` | GitHub App kimlik doğrulama: RS256 JWT → installation access token; PAT kullanılmaz |
+| `app/github_client.py` | GitHub App kimlik doğrulama: RS256 JWT → installation access token (PAT yok); `get_pr_bundle` / `get_files_content` paralel çekim; `create_review` batch inline yorum |
 | `app/prompts.py` | Türkçe, junior-dostu prompt şablonları (`SECURITY_EXPLAIN`, `SHORT_SUMMARY`, ...) |
 | `app/db.py` / `app/models.py` / `app/repository.py` | Çok kiracılı veri katmanı: kurulum kayıtları, kullanım logları, güvenlik bulguları (Faz 2b) |
 | `app/main.py` | FastAPI uygulaması + webhook event yönlendirmesi |
@@ -139,7 +162,7 @@ python scripts/get_installation_id.py                       # kurulu installatio
 | Endpoint | Açıklama |
 |----------|----------|
 | `GET /health` | Sağlık kontrolü |
-| `POST /webhook` | GitHub App webhook alıcısı (imza doğrulaması zorunlu) |
+| `POST /webhook` | GitHub App webhook alıcısı — imza zorunlu; `pull_request` analizi arka plana atılıp hemen `202` döner (GitHub 10 sn timeout'una takılmaz), `X-GitHub-Delivery` ile mükerrer retry atlanır |
 | `POST /local-review` | Diff'i doğrudan gönderip analiz ettirme — Semgrep çalıştırılamaz (gerçek dosya erişimi yok), LLM-only güvenlik incelemesine düşer |
 | `GET /stats` | JSON parser başarı oranı + (DB açıksa) kurulum/analiz sayaçları |
 | `GET/PUT /installations/{id}/settings` | Installation bazlı Semgrep ayarları (Faz 2c) — DB açıksa |
@@ -156,7 +179,7 @@ curl -X POST http://localhost:8000/local-review \
 pytest tests/ -v
 ```
 
-88 test fonksiyonu. Ağ erişimi yoksa (gerçek Gemini çağrısı) veya `semgrep` CLI
+95 test fonksiyonu. Ağ erişimi yoksa (gerçek Gemini çağrısı) veya `semgrep` CLI
 kurulu değilse ilgili testler otomatik atlanır — bkz. `tests/conftest.py`
 marker'ları (`network`, `requires_semgrep`). Veri katmanı testleri SQLite
 in-memory kullanır, Postgres gerektirmez.

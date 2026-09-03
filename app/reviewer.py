@@ -416,6 +416,7 @@ def review_diff(
     diff_text: str,
     review_types: List[str] = None,
     security_scan: Optional[Dict[str, Any]] = None,
+    precomputed_summary: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Analyze diff using two-stage approach:
@@ -431,6 +432,11 @@ def review_diff(
                        "error": "..."}. None ise (örn. /local-review — gerçek
                        dosya erişimi olmadığı için Semgrep çalıştırılamaz)
                        "security" eski LLM-tabanlı SECURITY_REVIEW'a düşer.
+        precomputed_summary: Faz 4.4 — çağıran taraf (main._run_pr_review)
+                       stage 1 (short_summary) analizini Semgrep'le PARALEL
+                       çalıştırıp sonucu buraya verir. Verilmişse burada
+                       tekrar LLM çağrısı yapılmaz. None ise stage 1 burada
+                       çalışır (eski davranış, /local-review vb.).
 
     Returns:
         Analysis results with metadata
@@ -457,8 +463,12 @@ def review_diff(
 
     # Stage 1: Always do summary
     if "short_summary" in review_types:
-        logger.info("📊 Stage 1: Summary analysis...")
-        stage1_result = analyze_diff_stage1(processed_diff)
+        if precomputed_summary is not None:
+            logger.info("📊 Stage 1: özet dışarıdan verildi (paralel çalıştırılmış)")
+            stage1_result = precomputed_summary
+        else:
+            logger.info("📊 Stage 1: Summary analysis...")
+            stage1_result = analyze_diff_stage1(processed_diff)
 
         if stage1_result:
             results["analyses"]["short_summary"] = stage1_result

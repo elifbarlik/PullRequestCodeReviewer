@@ -108,6 +108,106 @@ def db_disabled(monkeypatch):
     db_module._reset_for_tests(engine=None, session_factory=None)
 
 
+class FakeGitHubClient:
+    """
+    GitHubAppClient yerine geçen sahte istemci — _run_pr_review akış
+    testleri için. Faz 4.4 sonrası main.py'nin kullandığı yüzey:
+    get_pr_bundle, get_files_content, create_review, post_pr_comment,
+    list_review_comments.
+
+    `recorder` dict'ine gönderilen çağrıları kaydeder; testler bunu
+    inceler. `diff` / `files` / `head_sha` / `existing_comments` sınıf
+    seviyesinde override edilebilir.
+    """
+
+    diff = (
+        "--- a/app/db.py\n"
+        "+++ b/app/db.py\n"
+        "@@ -1,2 +1,4 @@\n"
+        " import os\n"
+        "+query = \"SELECT * FROM u WHERE id = \" + uid\n"
+        "+os.system(cmd)\n"
+        " x = 1\n"
+    )
+    files = [{"filename": "app/db.py", "status": "modified"}]
+    head_sha = "headsha123"
+
+    def __init__(self, installation_id):
+        self.installation_id = installation_id
+        self.recorder = {}
+
+    # --- Faz 4.4 toplu çekim ---
+    def get_pr_bundle(self, owner, repo, pr_number):
+        return {
+            "diff": self.diff,
+            "details": {"head": {"sha": self.head_sha}},
+            "files": self.files,
+        }
+
+    def get_files_content(self, owner, repo, filenames, ref, max_workers=8):
+        return {name: "print('x')\n" for name in filenames}
+
+    # --- geriye dönük tekil erişimler (bazı testler hâlâ kullanabilir) ---
+    def get_pr_diff(self, *a, **k):
+        return self.diff
+
+    def get_pr_details(self, *a, **k):
+        return {"head": {"sha": self.head_sha}}
+
+    def get_pr_files(self, *a, **k):
+        return self.files
+
+    def get_file_content(self, owner, repo, path, ref):
+        return "print('x')\n"
+
+    # --- yorum gönderimi ---
+    def create_review(self, **kw):
+        self.recorder["create_review"] = kw
+        return {"id": 10, "state": "COMMENTED"}
+
+    def post_pr_comment(self, **kw):
+        self.recorder.setdefault("post_pr_comment", []).append(kw)
+        return {"id": 1}
+
+    def list_review_comments(self, *a, **k):
+        return getattr(self, "existing_comments", [])
+
+
+@pytest.fixture
+def fake_github_client(monkeypatch):
+    """
+    main.GitHubAppClient'i FakeGitHubClient ile değiştirir ve son
+    oluşturulan örneği (recorder erişimi için) yakalar.
+
+    Kullanım:
+        def test_x(fake_github_client, ...):
+            holder = fake_github_client(diff=..., files=..., head_sha=...)
+            asyncio.run(main._run_pr_review(...))
+            assert "create_review" in holder.client.recorder
+    """
+    from app import main
+
+    class Holder:
+        client = None
+
+    holder = Holder()
+
+    def _factory(**overrides):
+        class _Configured(FakeGitHubClient):
+            pass
+        for k, v in overrides.items():
+            setattr(_Configured, k, v)
+
+        def _make(installation_id):
+            holder.client = _Configured(installation_id)
+            return holder.client
+
+        monkeypatch.setattr(main, "GitHubAppClient", _make)
+        return holder
+
+    return _factory
+
+
 @pytest.fixture
 def sample_github_pr():
     """GitHub PR örneği"""

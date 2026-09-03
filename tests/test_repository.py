@@ -244,35 +244,17 @@ class TestDbDisabledIsSafe:
 # =====================================================================
 
 class TestRunPrReviewRegression:
-    def test_pr_review_works_with_db_disabled(self, db_disabled, monkeypatch):
+    def test_pr_review_works_with_db_disabled(self, db_disabled, fake_github_client, monkeypatch):
         """
-        DB kapalıyken _run_pr_review; diff çeker, analiz eder, yorum gönderir —
-        loglama katmanı hiçbir şeyi bozmaz. (test_security_explain.py deseni)
+        DB kapalıyken _run_pr_review; PR verisini çeker, analiz eder, yorum
+        gönderir — loglama katmanı hiçbir şeyi bozmaz.
         """
         import asyncio
 
-        from app import main  # noqa: PLC0415
+        from app import main
 
-        class FakeClient:
-            def __init__(self, installation_id):
-                self.installation_id = installation_id
-                self.posted = []
-
-            def get_pr_diff(self, owner, repo, pr_number):
-                return "--- a/x.py\n+++ b/x.py\n@@ -1 +1,2 @@\n x\n+y\n"
-
-            def get_pr_details(self, *a, **k):
-                return {"head": {"sha": "abc123"}}
-
-            def get_pr_files(self, *a, **k):
-                return []
-
-            def post_pr_comment(self, owner, repo, pr_number, body):
-                self.posted.append(body)
-                return {"id": 1}
-
-        monkeypatch.setattr(main, "GitHubAppClient", FakeClient)
-        # Semgrep'i devre dışı bırak — bu test loglama akışını doğruluyor, taramayı değil
+        holder = fake_github_client(diff="--- a/x.py\n+++ b/x.py\n@@ -1 +1,2 @@\n x\n+y\n",
+                                    files=[])
         monkeypatch.setattr(
             main, "_run_semgrep_for_pr",
             lambda *a, **k: {"status": "unavailable", "error": "test"},
@@ -295,7 +277,7 @@ class TestRunPrReviewRegression:
         assert result["status"] == "success"
         assert result["pr_number"] == 3
 
-    def test_settings_disabled_skips_semgrep_entirely(self, db_session, monkeypatch):
+    def test_settings_disabled_skips_semgrep_entirely(self, db_session, fake_github_client, monkeypatch):
         """
         Faz 2c: bir installation için enabled=False ise Semgrep hiç
         çağrılmamalı ve "security" analiz tipinden düşülmeli.
@@ -305,16 +287,7 @@ class TestRunPrReviewRegression:
         from app import main, repository
 
         repository.set_installation_settings(42, enabled=False)
-
-        class FakeClient:
-            def __init__(self, installation_id):
-                pass
-
-            def get_pr_diff(self, *a, **k):
-                return "--- a/x.py\n+++ b/x.py\n@@ -1 +1,2 @@\n x\n+y\n"
-
-            def post_pr_comment(self, *a, **k):
-                return {"id": 1}
+        fake_github_client(files=[])
 
         semgrep_calls = {"n": 0}
 
@@ -322,7 +295,6 @@ class TestRunPrReviewRegression:
             semgrep_calls["n"] += 1
             return {"status": "ok", "findings": []}
 
-        monkeypatch.setattr(main, "GitHubAppClient", FakeClient)
         monkeypatch.setattr(main, "_run_semgrep_for_pr", spy_semgrep)
         captured = {}
         monkeypatch.setattr(
@@ -342,7 +314,7 @@ class TestRunPrReviewRegression:
         assert "security" not in captured["review_types"]    # security düşürüldü
         assert captured["security_scan"] is None
 
-    def test_settings_configs_passed_to_semgrep(self, db_session, monkeypatch):
+    def test_settings_configs_passed_to_semgrep(self, db_session, fake_github_client, monkeypatch):
         """enabled=True + özel ruleset → o config _run_semgrep_for_pr'e geçmeli."""
         import asyncio
 
@@ -351,24 +323,14 @@ class TestRunPrReviewRegression:
         repository.set_installation_settings(
             42, enabled=True, semgrep_configs=["p/secrets", "p/python"]
         )
-
-        class FakeClient:
-            def __init__(self, installation_id):
-                pass
-
-            def get_pr_diff(self, *a, **k):
-                return "--- a/x.py\n+++ b/x.py\n@@ -1 +1,2 @@\n x\n+y\n"
-
-            def post_pr_comment(self, *a, **k):
-                return {"id": 1}
+        fake_github_client(files=[])
 
         captured_configs = {}
 
-        def spy_semgrep(client, owner, repo, pr_number, diff_text, configs=None):
-            captured_configs["v"] = configs
+        def spy_semgrep(*a, **k):
+            captured_configs["v"] = k.get("configs")
             return {"status": "ok", "findings": []}
 
-        monkeypatch.setattr(main, "GitHubAppClient", FakeClient)
         monkeypatch.setattr(main, "_run_semgrep_for_pr", spy_semgrep)
         monkeypatch.setattr(
             main, "review_diff",
@@ -384,7 +346,7 @@ class TestRunPrReviewRegression:
         assert captured_configs["v"] == ["p/secrets", "p/python"]
 
     def test_pr_review_logs_usage_when_installation_row_missing(
-        self, db_session, monkeypatch
+        self, db_session, fake_github_client, monkeypatch
     ):
         """
         Canlı hatanın regresyon kalkanı: DB açık, ama installations tablosunda
@@ -393,21 +355,11 @@ class TestRunPrReviewRegression:
         """
         import asyncio
 
-        from app import main, repository
+        from app import main
 
         MISSING_ID = 157753289
 
-        class FakeClient:
-            def __init__(self, installation_id):
-                pass
-
-            def get_pr_diff(self, *a, **k):
-                return "--- a/x.py\n+++ b/x.py\n@@ -1 +1,2 @@\n x\n+y\n"
-
-            def post_pr_comment(self, *a, **k):
-                return {"id": 1}
-
-        monkeypatch.setattr(main, "GitHubAppClient", FakeClient)
+        fake_github_client(diff="--- a/x.py\n+++ b/x.py\n@@ -1 +1,2 @@\n x\n+y\n", files=[])
         monkeypatch.setattr(
             main, "_run_semgrep_for_pr",
             lambda *a, **k: {"status": "unavailable", "error": "test"},

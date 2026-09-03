@@ -36,7 +36,12 @@ _SEVERITY_MAP = {
     "INFO": "low",
 }
 
-SEMGREP_TIMEOUT_SECONDS = 120
+# Faz 4.4: içeriğe göre kademeli timeout. Küçük PR için 120 sn fazla —
+# kullanıcı 2 dk yorum bekleyemez. Dosya sayısına göre run_semgrep ayarlar.
+SEMGREP_TIMEOUT_SECONDS = 120          # geriye dönük varsayılan (dış çağrılar)
+SEMGREP_TIMEOUT_SMALL = 45            # ≤ SEMGREP_SMALL_FILE_LIMIT dosya
+SEMGREP_TIMEOUT_LARGE = 120
+SEMGREP_SMALL_FILE_LIMIT = 12
 
 # Faz 2c: installation başına seçilebilen ruleset'ler. Sadece Semgrep
 # Registry'nin "p/..." kısayolları — keyfi dosya yolu / URL kabul edilmez
@@ -93,7 +98,7 @@ def _semgrep_binary() -> str:
 def run_semgrep(
     files: Dict[str, str],
     configs: Optional[List[str]] = None,
-    timeout: int = SEMGREP_TIMEOUT_SECONDS,
+    timeout: Optional[int] = None,
 ) -> List[dict]:
     """
     Verilen dosyaları (yol -> içerik) geçici bir dizine yazıp Semgrep
@@ -117,6 +122,14 @@ def run_semgrep(
 
     binary = _semgrep_binary()
     configs = configs or DEFAULT_SEMGREP_CONFIGS
+
+    # Faz 4.4: küçük PR'de kısa timeout — kullanıcı 2 dk bekleyemez.
+    if timeout is None:
+        timeout = (
+            SEMGREP_TIMEOUT_SMALL
+            if len(files) <= SEMGREP_SMALL_FILE_LIMIT
+            else SEMGREP_TIMEOUT_LARGE
+        )
 
     with tempfile.TemporaryDirectory(prefix="secpr_semgrep_") as tmpdir:
         written_paths = []
@@ -147,10 +160,15 @@ def run_semgrep(
             "--disable-version-check",  # bkz. modül docstring'i — bu olmadan
                                          # ağ kısıtlı ortamlarda scan sonrası asılı kalır
             "--quiet",
+            "--jobs", str(os.cpu_count() or 1),   # Faz 4.4: çok çekirdek kullan
+            "--max-target-bytes", "1000000",       # 1 MB üstü dosyaları atla (üretilmiş/minified)
             tmpdir,
         ]
 
-        logger.info(f"📤 Semgrep çalıştırılıyor: {len(written_paths)} dosya, config={configs}")
+        logger.info(
+            f"📤 Semgrep çalıştırılıyor: {len(written_paths)} dosya, "
+            f"config={configs}, timeout={timeout}s"
+        )
         try:
             proc = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=timeout
