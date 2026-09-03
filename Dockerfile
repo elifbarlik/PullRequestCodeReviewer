@@ -21,8 +21,8 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # GitHub webhook timeout'una takılabilir. ALLOWED_SEMGREP_CONFIGS'teki
 # tüm ruleset'ler önceden çekilir; runtime'da ağ indirmesi olmaz.
 RUN mkdir -p /tmp/warm && echo "x = 1" > /tmp/warm/warm.py && \
-    semgrep scan --config p/security-audit --config p/secrets \
-      --config p/owasp-top-ten --config p/python --config p/javascript \
+    semgrep scan --config p/default --config p/python --config p/security-audit \
+      --config p/secrets --config p/owasp-top-ten --config p/javascript \
       --config p/typescript --config p/golang --config p/java \
       --config p/command-injection --config p/sql-injection --config p/xss \
       --metrics=off --disable-version-check --quiet /tmp/warm || true && \

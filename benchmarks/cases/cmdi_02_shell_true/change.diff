@@ -1,0 +1,8 @@
+--- a/app/backup.py
++++ b/app/backup.py
+@@ -2,4 +2,4 @@
+ 
+ 
+ def archive(name):
+-    subprocess.run(["tar", "czf", name + ".tgz", "data/"], check=True)
++    subprocess.run("tar czf " + name + ".tgz data/", shell=True, check=True)

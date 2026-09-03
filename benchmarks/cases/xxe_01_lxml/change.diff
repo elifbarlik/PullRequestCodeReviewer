@@ -1,0 +1,9 @@
+--- a/app/xml_parse.py
++++ b/app/xml_parse.py
+@@ -2,5 +2,5 @@
+ 
+ 
+ def parse(data):
+-    parser = etree.XMLParser(resolve_entities=False, no_network=True)
++    parser = etree.XMLParser(resolve_entities=True)
+     return etree.fromstring(data, parser)

@@ -188,6 +188,29 @@ in-memory kullanır, Postgres gerektirmez.
 pytest tests/ --cov=app --cov-report=html
 ```
 
+## Benchmark (Faz 4.2)
+
+Deterministik tarama katmanının (`scan_diff` = Semgrep + diff-satır filtresi)
+**recall / precision / süre** ölçümü:
+
+```bash
+python scripts/run_benchmark.py         # benchmarks/RESULTS.md güncellenir
+```
+
+`benchmarks/cases/` altında 28 senaryo (20 açıklı: SQLi, hardcoded secret,
+komut enjeksiyonu, path traversal, SSRF, zayıf kripto, `eval`, `pickle`,
+`yaml.load`, XXE, JWT/TLS misconfig, XSS, ...; 8 temiz: false positive
+ölçümü için). Güncel sonuç ve yöntem: [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md),
+sınırlar: [`benchmarks/README.md`](benchmarks/README.md).
+
+> OSS Semgrep ruleset kapsamı sınırlı — bazı sınıflar (ör. `os.system` concat,
+> `tempfile.mktemp`, `assert`-tabanlı yetki, lxml XXE) Pro rules olmadan
+> yakalanmıyor. Benchmark bunu **ölçüyor ve dürüstçe raporluyor**; abartılı
+> bir recall iddiası yok.
+
+CI'da `benchmark` job'ı her push'ta koşup recall regresyonunu (eşik %45) ve
+temiz PR false-positive artışını yakalar.
+
 ## Katkı ve destek
 
 - **Lisans:** [MIT](LICENSE)

@@ -1,0 +1,9 @@
+--- a/app/io_utils.py
++++ b/app/io_utils.py
+@@ -2,5 +2,5 @@
+ 
+ 
+ def scratch():
+-    fd, path = tempfile.mkstemp()
++    path = tempfile.mktemp()
+     return path

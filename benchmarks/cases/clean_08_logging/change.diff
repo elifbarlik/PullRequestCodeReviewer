@@ -1,0 +1,11 @@
+--- a/app/worker_ok.py
++++ b/app/worker_ok.py
+@@ -1,2 +1,8 @@
++import logging
++
++logger = logging.getLogger(__name__)
++
++
+ def run(job):
++    logger.info("job başladı: %s", job.id)
+     do(job)

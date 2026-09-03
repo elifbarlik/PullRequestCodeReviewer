@@ -1,0 +1,12 @@
+{
+  "description": "%-format ile kullanıcı adı sorguya giriyor",
+  "category": "sql-injection",
+  "should_flag": true,
+  "expected": [
+    {
+      "file": "app/report.py",
+      "line": 2,
+      "cwe_hint": "CWE-89"
+    }
+  ]
+}

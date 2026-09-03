@@ -1,0 +1,12 @@
+{
+  "description": "Yetki kontrolü assert ile (optimize modda atlanır)",
+  "category": "broken-auth",
+  "should_flag": true,
+  "expected": [
+    {
+      "file": "app/guard.py",
+      "line": 2,
+      "cwe_hint": "CWE-617"
+    }
+  ]
+}

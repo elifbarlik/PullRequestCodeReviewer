@@ -1,0 +1,11 @@
+--- a/app/tools_ok.py
++++ b/app/tools_ok.py
+@@ -1,5 +1,6 @@
+-import os
++import subprocess
++import shlex
+ 
+ 
+ def ping(host):
+-    os.system("ping -c 1 localhost")
++    subprocess.run(["ping", "-c", "1", host], check=True, timeout=5)

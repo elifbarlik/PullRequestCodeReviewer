@@ -1,0 +1,12 @@
+--- a/app/fetch.py
++++ b/app/fetch.py
+@@ -1,9 +1,5 @@
+ import requests
+-
+-ALLOWED = {"https://api.example.com"}
+ 
+ 
+ def proxy(url):
+-    if url not in ALLOWED:
+-        raise ValueError("not allowed")
+     return requests.get(url, timeout=5).text

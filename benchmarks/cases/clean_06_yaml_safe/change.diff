@@ -1,0 +1,8 @@
+--- a/app/loader_ok.py
++++ b/app/loader_ok.py
+@@ -2,4 +2,4 @@
+ 
+ 
+ def parse(t):
+-    return yaml.load(t)
++    return yaml.safe_load(t)

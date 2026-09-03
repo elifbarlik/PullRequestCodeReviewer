@@ -1,0 +1,12 @@
+{
+  "description": "Flask debug=True ile production'da çalışıyor (RCE yüzeyi)",
+  "category": "misconfiguration",
+  "should_flag": true,
+  "expected": [
+    {
+      "file": "app/wsgi.py",
+      "line": 6,
+      "cwe_hint": "CWE-489"
+    }
+  ]
+}

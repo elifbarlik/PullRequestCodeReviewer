@@ -1,0 +1,17 @@
+{
+  "description": "AWS erişim anahtarı koda gömülü",
+  "category": "hardcoded-secret",
+  "should_flag": true,
+  "expected": [
+    {
+      "file": "deploy/env.py",
+      "line": 1,
+      "cwe_hint": "CWE-798"
+    },
+    {
+      "file": "deploy/env.py",
+      "line": 2,
+      "cwe_hint": "CWE-798"
+    }
+  ]
+}

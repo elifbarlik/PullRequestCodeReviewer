@@ -13,6 +13,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from typing import Dict, List, Optional
 
@@ -20,11 +21,15 @@ from app.diff_utils import parse_added_lines
 
 logger = logging.getLogger(__name__)
 
-# Semgrep Registry'nin kürate ettiği, roadmap'te hedeflenen açık
-# sınıflarını (SQLi, hardcoded secret, path traversal, SSRF) kapsayan
-# iki ruleset. Gerçek çalışma ortamında internet erişimi gerekir (rule
-# pack'ler ilk çalıştırmada semgrep.dev'den indirilir, sonra cache'lenir).
-DEFAULT_SEMGREP_CONFIGS = ["p/security-audit", "p/secrets"]
+# Varsayılan ruleset seti. `p/security-audit` tek başına konservatif —
+# benchmark (benchmarks/, Faz 4.2) ile ölçüldü: `p/python` + `p/default`
+# eklendiğinde SQLi, komut enjeksiyonu, zayıf kripto, eval, insecure
+# deserialization, JWT/TLS misconfig, XSS (mark_safe) sınıflarında recall
+# belirgin artıyor; `p/secrets` API key / parola / bulut anahtarı yakalıyor.
+# Gerçek çalışma ortamında internet erişimi gerekir (rule pack'ler ilk
+# çalıştırmada semgrep.dev'den indirilir; Dockerfile bunları build'de
+# önceden cache'liyor — Faz 4.4).
+DEFAULT_SEMGREP_CONFIGS = ["p/default", "p/python", "p/security-audit", "p/secrets"]
 
 # Semgrep OSS "ERROR/WARNING/INFO" seviyelerini SecPR-TR'nin risk
 # skalasına (critical/high/medium/low) eşler. Semgrep OSS varsayılan
@@ -87,12 +92,21 @@ class SemgrepNotAvailable(Exception):
 
 
 def _semgrep_binary() -> str:
+    # 1. PATH
     path = shutil.which("semgrep")
-    if not path:
-        raise SemgrepNotAvailable(
-            "semgrep CLI PATH'te bulunamadı. Kurulum: pip install semgrep"
-        )
-    return path
+    if path:
+        return path
+    # 2. Aktif Python yorumlayıcısının yanındaki Scripts/bin dizini —
+    #    venv'i "activate" etmeden çalıştırıldığında (Windows dev, bazı CI)
+    #    semgrep PATH'te olmayabilir ama pip ile kurulmuştur.
+    exe_dir = os.path.dirname(sys.executable)
+    for name in ("semgrep", "semgrep.exe"):
+        candidate = os.path.join(exe_dir, name)
+        if os.path.isfile(candidate):
+            return candidate
+    raise SemgrepNotAvailable(
+        "semgrep CLI bulunamadı (PATH veya venv Scripts). Kurulum: pip install semgrep"
+    )
 
 
 def run_semgrep(
@@ -189,7 +203,11 @@ def run_semgrep(
         logger.info(f"📥 Semgrep tamamlandı: {len(results)} ham bulgu")
 
         for r in results:
-            r["path"] = os.path.relpath(r["path"], tmpdir)
+            # tmpdir'e göre göreli yol; ayrıca POSIX ayraç ('/') — GitHub
+            # diff'lerindeki path'ler her zaman '/' kullanır ve scan_diff
+            # bunları parse_added_lines çıktısıyla eşleştirir. Windows'ta
+            # os.path.relpath ters slash döndürüp eşleşmeyi bozuyordu.
+            r["path"] = os.path.relpath(r["path"], tmpdir).replace(os.sep, "/")
 
         return results
 

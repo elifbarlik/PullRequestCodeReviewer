@@ -1,0 +1,8 @@
+--- a/app/config.py
++++ b/app/config.py
+@@ -1,4 +1,4 @@
+ import os
+ 
+-API_KEY = os.environ["API_KEY"]
++API_KEY = "sk_live_4eC39HqLyjWDarjtT1zdp7dc"
+ DEBUG = False

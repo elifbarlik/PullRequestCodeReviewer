@@ -1,0 +1,6 @@
+{
+  "description": "Liste argümanlı subprocess — güvenli",
+  "category": "command-injection",
+  "should_flag": false,
+  "expected": []
+}

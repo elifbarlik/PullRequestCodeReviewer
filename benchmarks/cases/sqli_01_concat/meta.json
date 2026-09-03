@@ -1,0 +1,12 @@
+{
+  "description": "Kullanıcı id'si string concat ile SQL sorgusuna gömülüyor",
+  "category": "sql-injection",
+  "should_flag": true,
+  "expected": [
+    {
+      "file": "app/users.py",
+      "line": 7,
+      "cwe_hint": "CWE-89"
+    }
+  ]
+}

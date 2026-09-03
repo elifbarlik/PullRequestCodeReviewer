@@ -1,0 +1,6 @@
+{
+  "description": "yaml.safe_load'a geçiş — düzeltme",
+  "category": "insecure-deserialization",
+  "should_flag": false,
+  "expected": []
+}

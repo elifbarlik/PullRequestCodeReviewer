@@ -1,0 +1,6 @@
+{
+  "description": "Logging eklendi — güvenlik ilgisiz",
+  "category": "none",
+  "should_flag": false,
+  "expected": []
+}

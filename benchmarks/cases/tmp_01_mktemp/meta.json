@@ -1,0 +1,12 @@
+{
+  "description": "tempfile.mktemp TOCTOU race'e açık",
+  "category": "race-condition",
+  "should_flag": true,
+  "expected": [
+    {
+      "file": "app/io_utils.py",
+      "line": 5,
+      "cwe_hint": "CWE-377"
+    }
+  ]
+}

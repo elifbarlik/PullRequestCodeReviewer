@@ -1,0 +1,9 @@
+--- a/app/calc.py
++++ b/app/calc.py
+@@ -1,5 +1,2 @@
+-import ast
+-
+-
+ def compute(expr):
+-    return ast.literal_eval(expr)
++    return eval(expr)

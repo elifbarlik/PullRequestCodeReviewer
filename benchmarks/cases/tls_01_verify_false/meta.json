@@ -1,0 +1,12 @@
+{
+  "description": "TLS sertifika doğrulaması kapatılmış",
+  "category": "misconfiguration",
+  "should_flag": true,
+  "expected": [
+    {
+      "file": "app/client.py",
+      "line": 5,
+      "cwe_hint": "CWE-295"
+    }
+  ]
+}

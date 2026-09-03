@@ -1,0 +1,6 @@
+{
+  "description": "Parametreli sorgu — güvenli",
+  "category": "sql-injection",
+  "should_flag": false,
+  "expected": []
+}

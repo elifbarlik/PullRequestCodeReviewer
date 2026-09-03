@@ -1,0 +1,7 @@
+--- a/app/report.py
++++ b/app/report.py
+@@ -1,3 +1,3 @@
+ def fetch(cur, name):
+-    cur.execute("SELECT * FROM report WHERE owner = 'admin'")
++    cur.execute("SELECT * FROM report WHERE owner = '%s'" % name)
+     return cur.fetchall()

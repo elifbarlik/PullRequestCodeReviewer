@@ -1,0 +1,8 @@
+--- a/app/settings_loader.py
++++ b/app/settings_loader.py
+@@ -2,4 +2,4 @@
+ 
+ 
+ def parse(text):
+-    return yaml.safe_load(text)
++    return yaml.load(text)

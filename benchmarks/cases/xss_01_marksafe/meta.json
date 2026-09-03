@@ -1,0 +1,12 @@
+{
+  "description": "Kullanıcı girdisi mark_safe ile escape edilmeden işaretleniyor",
+  "category": "xss",
+  "should_flag": true,
+  "expected": [
+    {
+      "file": "app/views.py",
+      "line": 5,
+      "cwe_hint": "CWE-79"
+    }
+  ]
+}

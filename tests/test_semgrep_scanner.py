@@ -127,7 +127,10 @@ class TestScanDiff:
 
 class TestSemgrepNotAvailable:
     def test_raises_when_binary_missing(self, monkeypatch):
+        # PATH'te yok...
         monkeypatch.setattr(semgrep_scanner.shutil, "which", lambda name: None)
+        # ...ve venv Scripts/bin fallback'inde de yok
+        monkeypatch.setattr(semgrep_scanner.os.path, "isfile", lambda p: False)
         with pytest.raises(SemgrepNotAvailable):
             run_semgrep({"a.py": "x = 1"})
 

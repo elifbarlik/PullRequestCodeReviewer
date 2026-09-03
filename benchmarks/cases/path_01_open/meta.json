@@ -1,0 +1,12 @@
+{
+  "description": "Kullanıcı dosya adı sanitize edilmeden path'e giriyor",
+  "category": "path-traversal",
+  "should_flag": true,
+  "expected": [
+    {
+      "file": "app/files.py",
+      "line": 7,
+      "cwe_hint": "CWE-22"
+    }
+  ]
+}

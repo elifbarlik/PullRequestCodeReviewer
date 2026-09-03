@@ -1,0 +1,12 @@
+{
+  "description": "Kullanıcı girdisi os.system'e string concat ile geçiyor",
+  "category": "command-injection",
+  "should_flag": true,
+  "expected": [
+    {
+      "file": "app/tools.py",
+      "line": 5,
+      "cwe_hint": "CWE-78"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "description": "Güvenilmeyen veri pickle.loads ile deserialize ediliyor",
+  "category": "insecure-deserialization",
+  "should_flag": true,
+  "expected": [
+    {
+      "file": "app/cache.py",
+      "line": 5,
+      "cwe_hint": "CWE-502"
+    }
+  ]
+}

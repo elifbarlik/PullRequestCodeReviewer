@@ -1,0 +1,6 @@
+{
+  "description": "Secret env'den okunuyor — güvenli",
+  "category": "hardcoded-secret",
+  "should_flag": false,
+  "expected": []
+}

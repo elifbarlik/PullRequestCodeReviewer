@@ -1,0 +1,6 @@
+{
+  "description": "Sadece docstring eklendi",
+  "category": "none",
+  "should_flag": false,
+  "expected": []
+}

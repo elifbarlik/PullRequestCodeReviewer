@@ -1,0 +1,12 @@
+{
+  "description": "Canlı API anahtarı koda gömülmüş",
+  "category": "hardcoded-secret",
+  "should_flag": true,
+  "expected": [
+    {
+      "file": "app/config.py",
+      "line": 3,
+      "cwe_hint": "CWE-798"
+    }
+  ]
+}

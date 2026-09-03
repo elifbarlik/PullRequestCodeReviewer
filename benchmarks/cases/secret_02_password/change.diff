@@ -1,0 +1,8 @@
+--- a/app/db_conn.py
++++ b/app/db_conn.py
+@@ -2,4 +2,4 @@
+ 
+ 
+ def connect():
+-    return psycopg2.connect(dsn=os.environ["DATABASE_URL"])
++    return psycopg2.connect(host="db", user="admin", password="SuperSecret123!")

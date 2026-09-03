@@ -1,0 +1,12 @@
+{
+  "description": "Kullanıcı ifadesi doğrudan eval'e veriliyor",
+  "category": "code-injection",
+  "should_flag": true,
+  "expected": [
+    {
+      "file": "app/calc.py",
+      "line": 2,
+      "cwe_hint": "CWE-95"
+    }
+  ]
+}

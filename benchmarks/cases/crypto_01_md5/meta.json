@@ -1,0 +1,12 @@
+{
+  "description": "Parola hash'i için MD5 kullanılıyor",
+  "category": "weak-crypto",
+  "should_flag": true,
+  "expected": [
+    {
+      "file": "app/auth.py",
+      "line": 5,
+      "cwe_hint": "CWE-327"
+    }
+  ]
+}

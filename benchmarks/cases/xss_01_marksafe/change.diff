@@ -1,0 +1,10 @@
+--- a/app/views.py
++++ b/app/views.py
+@@ -1,5 +1,5 @@
+-from django.utils.html import escape
++from django.utils.safestring import mark_safe
+ 
+ 
+ def render_name(request):
+-    return escape(request.GET.get("name", ""))
++    return mark_safe(request.GET.get("name", ""))

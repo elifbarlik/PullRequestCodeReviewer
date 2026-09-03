@@ -1,0 +1,12 @@
+{
+  "description": "JWT imzası doğrulanmadan decode ediliyor",
+  "category": "broken-auth",
+  "should_flag": true,
+  "expected": [
+    {
+      "file": "app/token.py",
+      "line": 5,
+      "cwe_hint": "CWE-347"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+--- a/app/auth.py
++++ b/app/auth.py
+@@ -2,4 +2,4 @@
+ 
+ 
+ def hash_pw(pw, salt):
+-    return hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, 200000).hex()
++    return hashlib.md5(pw.encode()).hexdigest()

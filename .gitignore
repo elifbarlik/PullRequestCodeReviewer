@@ -55,3 +55,7 @@ logs/
 *.pem
 *.private-key.pem
 secrets/
+
+# Semgrep yerel cache/log (benchmark koşumları oluşturur)
+.semgrep/
+.semgrep_logs/

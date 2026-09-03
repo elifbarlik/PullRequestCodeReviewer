@@ -2,46 +2,68 @@ name: Tests
 
 on:
   push:
-    branches: [ master, develop ]
+    branches: [ main, master, develop ]
   pull_request:
-    branches: [ master, develop ]
+    branches: [ main, master, develop ]
 
 jobs:
   test:
     runs-on: ubuntu-latest
 
     steps:
-    # 1. Repo'yu checkout et
     - uses: actions/checkout@v4
 
-    # 2. Python 3.11 kur
     - name: Set up Python 3.11
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
         cache: 'pip'
 
-    # 3. Dependencies install et
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pytest pytest-cov
 
-    # 4. Tests çalıştır
     - name: Run tests
-      run: |
-        pytest tests/ -v --tb=short
+      run: pytest tests/ -v --tb=short
 
-    # 5. Test badge'ı oluştur (opsiyonel)
-    - name: Create test badge
-      if: always()
+  benchmark:
+    # Semgrep kurulu; benchmark koşup regresyon (recall düşüşü) yakalar.
+    # PR yorumu olarak sonuç bırakmaz — RESULTS.md repoda tutulur, bu job
+    # sadece "hâlâ çalışıyor mu + recall eşiğin üstünde mi" kontrolü.
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
       run: |
-        # Test sonuçlarını kontrol et
-        if pytest tests/ -q > /dev/null 2>&1; then
-          echo "Tests passed!"
-          echo "BADGE_STATUS=passing" >> $GITHUB_ENV
-        else
-          echo "Tests failed!"
-          echo "BADGE_STATUS=failing" >> $GITHUB_ENV
-        fi
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Warm Semgrep rulesets
+      run: |
+        mkdir -p /tmp/warm && echo "x = 1" > /tmp/warm/warm.py
+        semgrep scan --config p/default --config p/python --config p/security-audit \
+          --config p/secrets --metrics=off --disable-version-check --quiet /tmp/warm || true
+
+    - name: Run benchmark
+      run: |
+        python scripts/run_benchmark.py --json | tee /tmp/bench.json
+        python - <<'EOF'
+        import json, sys
+        agg = json.load(open("/tmp/bench.json"))
+        print(f"recall={agg['recall']:.2%} precision={agg['precision']:.2%} "
+              f"f1={agg['f1']:.2%} clean_fp={agg['clean_false_positives']} "
+              f"median={agg['median_scan_ms']}ms")
+        # Regresyon eşikleri — benchmark bilerek zayıflatılmadıkça bunun altına düşmemeli
+        assert agg["recall"] >= 0.45, f"recall regresyonu: {agg['recall']}"
+        assert agg["clean_false_positives"] <= 1, f"temiz PR false positive arttı: {agg['clean_false_positives']}"
+        assert not agg["errors"], f"hata veren senaryolar: {agg['errors']}"
+        EOF

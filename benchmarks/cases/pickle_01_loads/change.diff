@@ -1,0 +1,10 @@
+--- a/app/cache.py
++++ b/app/cache.py
+@@ -1,5 +1,5 @@
+-import json
++import pickle
+ 
+ 
+ def load(blob):
+-    return json.loads(blob)
++    return pickle.loads(blob)

@@ -1,0 +1,12 @@
+{
+  "description": "yaml.load SafeLoader olmadan çağrılıyor",
+  "category": "insecure-deserialization",
+  "should_flag": true,
+  "expected": [
+    {
+      "file": "app/settings_loader.py",
+      "line": 5,
+      "cwe_hint": "CWE-502"
+    }
+  ]
+}
