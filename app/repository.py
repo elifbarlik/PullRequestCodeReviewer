@@ -52,6 +52,56 @@ def upsert_installation(
         logger.error(f"⚠️  upsert_installation başarısız (yutuldu): {e}")
 
 
+def ensure_installation(
+    installation_id: int,
+    account_login: str = "unknown",
+    account_type: str = "unknown",
+    repository_selection: Optional[str] = None,
+) -> bool:
+    """
+    Installation satırının var olduğunu garanti eder — yoksa oluşturur.
+
+    Neden gerekli: `installation.created` webhook'u kaçırılmış olabilir
+    (App, bu DB devreye girmeden önce kurulduysa GitHub o event'i bir daha
+    GÖNDERMEZ). Bu durumda ilk `pull_request` event'inde installation
+    DB'de bulunmaz ve `usage_logs` INSERT'i ForeignKeyViolation ile patlar.
+    Bu fonksiyon PR review akışında `record_usage`'dan ÖNCE çağrılarak
+    kaydı lazy olarak açar.
+
+    Var olan bir satırı GÜNCELLEMEZ (account bilgisi zaten doğruysa
+    dokunmaya gerek yok, yanlışsa da `installation` event'i düzeltir) —
+    sadece eksikse ekler.
+
+    Returns:
+        True: satır zaten vardı ya da oluşturuldu | False: DB kapalı / hata
+    """
+    if not db_enabled():
+        return False
+    try:
+        from app.models import Installation
+
+        with get_session() as session:
+            if session.get(Installation, installation_id) is not None:
+                return True
+            session.add(
+                Installation(
+                    id=installation_id,
+                    account_login=account_login,
+                    account_type=account_type,
+                    repository_selection=repository_selection,
+                    is_active=True,
+                )
+            )
+        logger.info(
+            f"🗄️  installation lazy oluşturuldu (created event'i kaçırılmış): "
+            f"id={installation_id} hesap={account_login}"
+        )
+        return True
+    except Exception as e:
+        logger.error(f"⚠️  ensure_installation başarısız (yutuldu): {e}")
+        return False
+
+
 def deactivate_installation(installation_id: int) -> None:
     """installation.deleted → soft-delete (satır silinmez, is_active=False)."""
     if not db_enabled():

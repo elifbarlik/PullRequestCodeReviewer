@@ -24,6 +24,7 @@ from app.semgrep_scanner import scan_diff, SemgrepNotAvailable, validate_configs
 from app.db import init_db
 from app.repository import (
     upsert_installation,
+    ensure_installation,
     deactivate_installation,
     update_installation_repos,
     record_usage,
@@ -324,6 +325,8 @@ async def _run_pr_review(
     repo: str,
     pr_number: int,
     review_types: Optional[List[str]] = None,
+    account_login: Optional[str] = None,
+    account_type: Optional[str] = None,
 ) -> dict:
     """
     Verilen PR'yi analiz eder ve sonuçları PR'e yorum olarak gönderir.
@@ -332,6 +335,8 @@ async def _run_pr_review(
         installation_id: Webhook'tan gelen installation.id
         owner, repo, pr_number: PR koordinatları
         review_types: Hangi analizler çalışsın
+        account_login, account_type: Webhook payload'ındaki installation.account —
+            installation.created event'i kaçırılmışsa DB kaydını lazy açmak için
 
     Returns:
         Sonuç özeti dict'i
@@ -340,6 +345,15 @@ async def _run_pr_review(
         review_types = ["short_summary", "security"]
 
     started_at = time.monotonic()
+
+    # installation.created event'i kaçırılmış olabilir (App bu DB devreye
+    # girmeden önce kurulduysa GitHub o event'i bir daha göndermez) —
+    # usage_logs INSERT'i FK violation ile patlamadan önce satırı garanti et.
+    ensure_installation(
+        installation_id,
+        account_login=account_login or owner or "unknown",
+        account_type=account_type or "unknown",
+    )
 
     # Installation'a özgü client — kendi installation token'ını yönetir
     client = GitHubAppClient(installation_id=installation_id)
@@ -574,6 +588,12 @@ async def _handle_pull_request_event(action: str, payload: dict) -> dict:
     pr_number = pr.get("number")
     installation_id = installation.get("id")
 
+    # installation.account payload'da her zaman gelmez (pull_request event'inde
+    # genelde sadece installation.id var); repo.owner'a düş.
+    repo_owner = repo_data.get("owner", {})
+    account_login = installation.get("account", {}).get("login") or repo_owner.get("login")
+    account_type = installation.get("account", {}).get("type") or repo_owner.get("type")
+
     if not all([owner, repo, pr_number, installation_id]):
         missing = [k for k, v in {
             "owner": owner, "repo": repo,
@@ -589,6 +609,8 @@ async def _handle_pull_request_event(action: str, payload: dict) -> dict:
         repo=repo,
         pr_number=pr_number,
         review_types=["short_summary", "security"],
+        account_login=account_login,
+        account_type=account_type,
     )
 
 

@@ -70,6 +70,38 @@ class TestInstallationCrud:
         with db_session() as s:
             assert s.get(Installation, 111) is not None
 
+    def test_ensure_installation_creates_missing_row(self, db_session):
+        # installation.created event'i kaçırılmış senaryosu
+        assert repository.ensure_installation(157753289, "elifbarlik", "User") is True
+        with db_session() as s:
+            inst = s.get(Installation, 157753289)
+            assert inst is not None
+            assert inst.account_login == "elifbarlik"
+            assert inst.is_active is True
+
+    def test_ensure_installation_does_not_overwrite_existing(self, db_session):
+        repository.upsert_installation(111, "acme", "Organization", "all")
+        # var olan satıra dokunmamalı — yanlış account bilgisi gelse bile
+        repository.ensure_installation(111, "yanlis-isim", "User")
+        with db_session() as s:
+            inst = s.get(Installation, 111)
+            assert inst.account_login == "acme"
+            assert inst.account_type == "Organization"
+
+    def test_record_usage_after_ensure_installation_does_not_raise_fk(self, db_session):
+        # Asıl regresyon kalkanı: ensure_installation + record_usage zinciri
+        # ForeignKeyViolation vermemeli (canlıdaki hatanın birebir senaryosu)
+        repository.ensure_installation(157753289, "elifbarlik", "User")
+        usage_id = repository.record_usage(
+            installation_id=157753289,
+            owner="elifbarlik",
+            repo="demo",
+            pr_number=1,
+        )
+        assert isinstance(usage_id, int)
+        with db_session() as s:
+            assert s.get(UsageLog, usage_id).installation_id == 157753289
+
 
 class TestUsageAndFindings:
     def test_record_usage_returns_id_and_persists(self, db_session):
@@ -350,3 +382,51 @@ class TestRunPrReviewRegression:
             )
         )
         assert captured_configs["v"] == ["p/secrets", "p/python"]
+
+    def test_pr_review_logs_usage_when_installation_row_missing(
+        self, db_session, monkeypatch
+    ):
+        """
+        Canlı hatanın regresyon kalkanı: DB açık, ama installations tablosunda
+        bu installation YOK (installation.created event'i kaçırılmış). _run_pr_review
+        ForeignKeyViolation vermeden çalışmalı ve usage_logs kaydı oluşmalı.
+        """
+        import asyncio
+
+        from app import main, repository
+
+        MISSING_ID = 157753289
+
+        class FakeClient:
+            def __init__(self, installation_id):
+                pass
+
+            def get_pr_diff(self, *a, **k):
+                return "--- a/x.py\n+++ b/x.py\n@@ -1 +1,2 @@\n x\n+y\n"
+
+            def post_pr_comment(self, *a, **k):
+                return {"id": 1}
+
+        monkeypatch.setattr(main, "GitHubAppClient", FakeClient)
+        monkeypatch.setattr(
+            main, "_run_semgrep_for_pr",
+            lambda *a, **k: {"status": "unavailable", "error": "test"},
+        )
+        monkeypatch.setattr(
+            main, "review_diff",
+            lambda **k: {"status": "success", "analyses": {}, "metadata": {}},
+        )
+
+        result = asyncio.run(
+            main._run_pr_review(
+                installation_id=MISSING_ID, owner="elifbarlik", repo="demo",
+                pr_number=1, review_types=["short_summary", "security"],
+                account_login="elifbarlik", account_type="User",
+            )
+        )
+        assert result["status"] == "success"
+
+        with db_session() as s:
+            assert s.get(Installation, MISSING_ID) is not None      # lazy oluştu
+            logs = s.query(UsageLog).filter_by(installation_id=MISSING_ID).all()
+            assert len(logs) == 1                                   # FK hatası YOK
