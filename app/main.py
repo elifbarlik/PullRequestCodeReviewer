@@ -74,7 +74,7 @@ async def _lifespan(_app: "FastAPI"):
     yield
 
 
-app = FastAPI(title="SecPR-TR", version="0.3.0", lifespan=_lifespan)
+app = FastAPI(title="SecPR-TR", version="0.4.0", lifespan=_lifespan)
 
 # Rate limiting: local review endpoint
 limiter = Limiter(key_func=get_remote_address)
