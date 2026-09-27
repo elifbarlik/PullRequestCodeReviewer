@@ -18,6 +18,9 @@ from collections import OrderedDict
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from pydantic import BaseModel
 from typing import List, Optional
 from app.reviewer import (
@@ -72,6 +75,11 @@ async def _lifespan(_app: "FastAPI"):
 
 
 app = FastAPI(title="SecPR-TR", version="0.3.0", lifespan=_lifespan)
+
+# Rate limiting: local review endpoint
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 # -------------------------------------------------------------------
@@ -260,18 +268,19 @@ async def update_installation_settings(
 # -------------------------------------------------------------------
 
 @app.post("/local-review", response_model=ReviewResponse)
-async def local_review(request: DiffRequest):
+@limiter.limit("10/hour")
+async def local_review(request: Request, body: DiffRequest):
     """Doğrudan gönderilen diff'i analiz eder (webhook gerektirmez)."""
 
-    if not request.diff_text or len(request.diff_text.strip()) == 0:
+    if not body.diff_text or len(body.diff_text.strip()) == 0:
         raise HTTPException(status_code=400, detail="diff_text boş olamaz")
 
-    original_size = len(request.diff_text)
-    diff_to_analyze = truncate_diff(request.diff_text, max_length=3000)
+    original_size = len(body.diff_text)
+    diff_to_analyze = truncate_diff(body.diff_text, max_length=3000)
     was_truncated = len(diff_to_analyze) < original_size
 
     valid_types = ["short_summary", "bug_detection", "performance", "security"]
-    review_types = request.review_types or ["short_summary", "bug_detection"]
+    review_types = body.review_types or ["short_summary", "bug_detection"]
 
     for rt in review_types:
         if rt not in valid_types:
@@ -286,7 +295,7 @@ async def local_review(request: DiffRequest):
 
     return ReviewResponse(
         status=result["status"],
-        file_name=request.file_name,
+        file_name=body.file_name,
         diff_length=original_size,
         was_truncated=was_truncated,
         analyses=result["analyses"],
