@@ -106,25 +106,35 @@ def get_session() -> Iterator[object]:
 
 def init_db() -> bool:
     """
-    Tabloları oluşturur (yoksa). Uygulama startup'ında çağrılır.
+    Veritabanı şemasını Alembic ile günceller.
 
-    Basit `create_all` yaklaşımı — MVP için yeterli. Şema evrilmeye
-    başladığında Alembic migration'larına geçilecek (requirements.txt'te
-    alembic zaten var).
+    DATABASE_URL yoksa DB opsiyonel olmaya devam eder. Mevcut MVP
+    veritabanları için 0001 baseline migration tabloyu yeniden oluşturmaz;
+    sonraki şema değişiklikleri yalnızca yeni migration'larla uygulanır.
 
     Returns:
-        True: tablolar hazır | False: DB devre dışı
+        True: migration'lar başarıyla uygulandı | False: DB devre dışı
     """
-    engine = get_engine()
-    if engine is None:
-        logger.info("ℹ️  DB devre dışı — DATABASE_URL tanımlı değil, veri katmanı atlanıyor")
+    if not db_enabled():
+        logger.info("ℹ️  DB devre dışı — DATABASE_URL tanımlı değil, migration atlanıyor")
         return False
 
-    from app.models import Base
+    try:
+        from pathlib import Path
+        from alembic import command
+        from alembic.config import Config
 
-    Base.metadata.create_all(engine)
-    logger.info("✅ DB tabloları hazır (installations, usage_logs, findings, settings)")
-    return True
+        project_root = Path(__file__).resolve().parent.parent
+        alembic_cfg = Config(str(project_root / "alembic.ini"))
+        command.upgrade(alembic_cfg, "head")
+        logger.info("✅ Alembic migration'ları başarıyla uygulandı")
+        return True
+    except Exception:
+        # Startup caller decides whether the service should continue when DB
+        # migration fails; keeping this function exception-transparent makes
+        # migration failures observable instead of silently hiding them.
+        logger.exception("❌ Alembic migration başarısız")
+        raise
 
 
 def _reset_for_tests(engine=None, session_factory=None) -> None:
