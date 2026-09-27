@@ -45,6 +45,7 @@ import json
 import hmac
 import hashlib
 import os
+import secrets as _secrets
 import time
 from dotenv import load_dotenv
 import logging
@@ -176,6 +177,29 @@ async def get_stats():
 
 
 # -------------------------------------------------------------------
+# Admin endpoint authentication
+# -------------------------------------------------------------------
+
+def _verify_admin_token(request: Request) -> None:
+    """
+    Admin endpoint'leri için token doğrulama.
+
+    ADMIN_SECRET tanımlı değilse endpoint erişimi tamamen engellenir.
+    Token karşılaştırması timing attack'lere karşı sabit zamanlıdır.
+    """
+    admin_secret = os.getenv("ADMIN_SECRET", "")
+    if not admin_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Admin token yapılandırılmamış — ADMIN_SECRET eksik",
+        )
+
+    token = request.headers.get("X-Admin-Token", "")
+    if not _secrets.compare_digest(admin_secret, token):
+        raise HTTPException(status_code=401, detail="Geçersiz admin token")
+
+
+# -------------------------------------------------------------------
 # Endpoint: installation ayarları (Faz 2c)
 # -------------------------------------------------------------------
 # Henüz dashboard yok (Faz 5); ayarlar bu iki endpoint ile yönetilir.
@@ -183,9 +207,11 @@ async def get_stats():
 # şimdilik iç/operasyonel kullanım varsayılıyor.
 
 @app.get("/installations/{installation_id}/settings")
-async def read_installation_settings(installation_id: int):
+async def read_installation_settings(installation_id: int, request: Request):
     """Bir installation'ın Semgrep ayarlarını döndürür (yoksa varsayılan)."""
     from app.db import db_enabled
+
+    _verify_admin_token(request)
 
     if not db_enabled():
         raise HTTPException(status_code=503, detail="Veri katmanı devre dışı (DATABASE_URL yok)")
@@ -197,7 +223,7 @@ async def read_installation_settings(installation_id: int):
 
 @app.put("/installations/{installation_id}/settings")
 async def update_installation_settings(
-    installation_id: int, body: InstallationSettingsRequest
+    installation_id: int, body: InstallationSettingsRequest, request: Request
 ):
     """
     Installation ayarlarını günceller.
@@ -208,6 +234,8 @@ async def update_installation_settings(
     - reset_configs=true → varsayılan ruleset'e dön
     """
     from app.db import db_enabled
+
+    _verify_admin_token(request)
 
     if not db_enabled():
         raise HTTPException(status_code=503, detail="Veri katmanı devre dışı (DATABASE_URL yok)")
