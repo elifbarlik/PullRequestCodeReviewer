@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 import os
 from google import genai
 from google.genai import types
+from app.cost_control import build_cache_key, clamp_output_tokens, llm_response_cache
 
 load_dotenv()
 
@@ -146,6 +147,20 @@ def call_llm(
     use_json_mode=False → serbest metin modu (kısa özet için, güvenlik filtresi sorunu yok)
     """
     try:
+        max_tokens = clamp_output_tokens(max_tokens)
+        model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        cache_key = build_cache_key(
+            model=model_name,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            use_json_mode=use_json_mode,
+        )
+        cached_response = llm_response_cache.get(cache_key)
+        if cached_response is not None:
+            logger.info(f"♻️ LLM cache hit: {prompt_name}")
+            return cached_response
+
         gen_config_kwargs = {
             "max_output_tokens": max_tokens,
             "temperature": temperature,
@@ -162,7 +177,7 @@ def call_llm(
 
         logger.info(f"📤 LLM çağrısı: {prompt_name} (max_tokens={max_tokens}, json_mode={use_json_mode})")
         response = _get_gemini_client().models.generate_content(
-            model="gemini-2.5-flash",
+            model=model_name,
             contents=prompt,
             config=types.GenerateContentConfig(**gen_config_kwargs),
         )
@@ -172,6 +187,7 @@ def call_llm(
             raise Exception("Gemini boş yanıt döndürdü")
 
         logger.info(f"📥 Yanıt alındı ({len(response_text)} karakter)")
+        llm_response_cache.set(cache_key, response_text)
         return response_text
 
     except Exception as e:
