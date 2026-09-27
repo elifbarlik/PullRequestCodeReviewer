@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SecPR-TR — Dashboard</title><link rel="stylesheet" href="/static/styles.css"></head>
+<body><header class="nav"><a class="brand" href="/">SecPR-TR</a><span class="status">● API</span></header>
+<main class="shell dashboard"><div class="page-head"><div><p class="eyebrow">OVERVIEW</p><h1>Review Dashboard</h1><p class="muted">Analiz altyapısının anlık özeti.</p></div><button id="refresh" class="button secondary">Yenile</button></div>
+<section class="cards">
+<div class="card"><span>Toplam deneme</span><strong id="attempts">—</strong></div>
+<div class="card"><span>Başarılı parse</span><strong id="success">—</strong></div>
+<div class="card"><span>Başarı oranı</span><strong id="rate">—</strong></div>
+<div class="card"><span>Veri katmanı</span><strong id="db">—</strong></div>
+</section>
+<section class="panel"><h2>Parser sağlığı</h2><div class="bar"><i id="bar"></i></div><div class="split"><span>Başarı oranı</span><b id="rate2">—</b></div></section>
+<p id="error" class="error"></p></main>
+<script src="/static/dashboard.js"></script></body></html>

@@ -18,6 +18,7 @@ from collections import OrderedDict
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -33,6 +34,7 @@ from app.github_client import GitHubAppClient
 from app.semgrep_scanner import scan_diff, SemgrepNotAvailable, validate_configs
 from app.diff_utils import parse_added_lines
 from app.db import init_db
+from app.web import router as web_router
 from app.repository import (
     upsert_installation,
     ensure_installation,
@@ -74,7 +76,9 @@ async def _lifespan(_app: "FastAPI"):
     yield
 
 
-app = FastAPI(title="SecPR-TR", version="0.4.0", lifespan=_lifespan)
+app = FastAPI(title="SecPR-TR", version="0.5.0", lifespan=_lifespan)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+app.include_router(web_router)
 
 # Rate limiting: local review endpoint
 limiter = Limiter(key_func=get_remote_address)
