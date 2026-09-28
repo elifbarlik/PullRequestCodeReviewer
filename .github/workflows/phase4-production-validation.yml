@@ -3,6 +3,7 @@ name: Phase 4 Production Validation
 on:
   push:
     branches:
+      - main
       - ops/phase4-production-validation
 
 jobs:
