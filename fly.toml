@@ -9,7 +9,7 @@ primary_region = 'fra'
 [build]
 [env]
   LOG_FORMAT = "json"
-  HOURLY_PR_LIMIT = "50"
+  HOURLY_PR_LIMIT = "5"
 
 [http_service]
   internal_port = 8000
