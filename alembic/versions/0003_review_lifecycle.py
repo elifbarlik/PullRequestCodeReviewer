@@ -47,8 +47,6 @@ def upgrade() -> None:
             sa.Column("findings_count", sa.Integer(), nullable=True),
             sa.Column("error", sa.Text(), nullable=True),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-            sa.ForeignKeyConstraint(["installation_id"], ["installations.id"]),
-            sa.ForeignKeyConstraint(["repository_id"], ["repositories.id"]),
             sa.PrimaryKeyConstraint("id"),
             sa.UniqueConstraint("repository_id", "pr_number", "head_sha", name="uq_review_runs_repo_pr_sha"),
         )
