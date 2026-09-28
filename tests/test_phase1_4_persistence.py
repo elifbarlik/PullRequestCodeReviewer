@@ -51,6 +51,17 @@ def test_webhook_delivery_is_durable_and_idempotent(db):
         assert row.processed_at is not None
 
 
+
+def test_webhook_delivery_can_be_claimed_before_any_entity_exists(db):
+    # First delivery must be durable even when installation/repository rows
+    # do not exist yet (e.g. the first installation webhook after DB setup).
+    assert claim_webhook_delivery(
+        "delivery-before-entities", "installation", "created", None, None
+    ) is False
+    assert claim_webhook_delivery(
+        "delivery-before-entities", "installation", "created", None, None
+    ) is True
+
 def test_review_run_has_persistent_lifecycle(db):
     repository_id = upsert_repository(
         installation_id=100,

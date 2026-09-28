@@ -917,17 +917,11 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
         repository_data = payload.get("repository", {})
         repository_id = repository_data.get("id")
 
-        if _already_processed(
-            delivery_id,
-            event_type=event_type,
-            action=action,
-            installation_id=installation_id,
-            repository_id=repository_id,
-        ):
-            logger.info(f"↩️  Mükerrer delivery, atlanıyor: {delivery_id}")
-            return {"status": "duplicate", "delivery": delivery_id}
-
+        # Installation/repository-management events can arrive before their
+        # entities exist locally. Claim them without FK metadata.
         if event_type == "installation":
+            if _already_processed(delivery_id, event_type, action, None, None):
+                return {"status": "duplicate", "delivery": delivery_id}
             try:
                 result = await _handle_installation_event(action, payload)
                 mark_webhook_delivery(delivery_id, "processed")
@@ -937,6 +931,8 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
                 raise
 
         if event_type == "installation_repositories":
+            if _already_processed(delivery_id, event_type, action, None, None):
+                return {"status": "duplicate", "delivery": delivery_id}
             try:
                 result = await _handle_installation_repositories_event(action, payload)
                 mark_webhook_delivery(delivery_id, "processed")
@@ -947,6 +943,8 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
 
         if event_type == "pull_request":
             if action not in ("opened", "synchronize"):
+                if _already_processed(delivery_id, event_type, action, None, None):
+                    return {"status": "duplicate", "delivery": delivery_id}
                 mark_webhook_delivery(delivery_id, "ignored")
                 return {"status": "ignored", "reason": f"pull_request.{action} analiz tetiklemez"}
 
@@ -959,20 +957,14 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
             account_login = account.get("login") or owner or "unknown"
             account_type = account.get("type") or repository_data.get("owner", {}).get("type") or "unknown"
 
-            # Real GitHub pull_request deliveries contain these identity fields.
-            # Keep the endpoint compatible with lightweight/unit-test payloads:
-            # if fields are incomplete, run the existing handler without persistence.
             if not all([installation_id, repository_id, owner, repo_name, pr_number, head_sha]):
-                background_tasks.add_task(
-                    _process_pr_event_bg, action, payload, delivery_id, None
-                )
+                if _already_processed(delivery_id, event_type, action, None, None):
+                    return {"status": "duplicate", "delivery": delivery_id}
+                background_tasks.add_task(_process_pr_event_bg, action, payload, delivery_id, None)
                 return {"status": "accepted", "event": "pull_request", "action": action}
 
-            ensure_installation(
-                installation_id,
-                account_login=account_login,
-                account_type=account_type,
-            )
+            # Establish FK parents before the durable delivery claim.
+            ensure_installation(installation_id, account_login=account_login, account_type=account_type)
             repo_row_id = upsert_repository(
                 installation_id=installation_id,
                 github_repository_id=repository_id,
@@ -984,26 +976,19 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
                 mark_webhook_delivery(delivery_id, "failed", "Repository persistence unavailable")
                 raise HTTPException(status_code=503, detail="Repository persistence unavailable")
 
-            review_run_id = create_review_run(
-                installation_id=installation_id,
-                repository_id=repo_row_id,
-                pr_number=pr_number,
-                head_sha=head_sha,
-            )
+            if _already_processed(delivery_id, event_type, action, installation_id, repository_id):
+                return {"status": "duplicate", "delivery": delivery_id}
+
+            review_run_id = create_review_run(installation_id, repo_row_id, pr_number, head_sha)
             if review_run_id is None:
                 mark_webhook_delivery(delivery_id, "failed", "Review run persistence unavailable")
                 raise HTTPException(status_code=503, detail="Review run persistence unavailable")
 
-            background_tasks.add_task(
-                _process_pr_event_bg, action, payload, delivery_id, review_run_id
-            )
-            return {
-                "status": "accepted",
-                "event": "pull_request",
-                "action": action,
-                "review_run_id": review_run_id,
-            }
+            background_tasks.add_task(_process_pr_event_bg, action, payload, delivery_id, review_run_id)
+            return {"status": "accepted", "event": "pull_request", "action": action, "review_run_id": review_run_id}
 
+        if not _already_processed(delivery_id, event_type, action, None, None):
+            mark_webhook_delivery(delivery_id, "ignored")
         return {"status": "ignored", "reason": f"'{event_type}' event'i desteklenmiyor"}
 
     except HTTPException:

@@ -122,8 +122,8 @@ def update_installation_repos(
     installation_id: int, added: List[str], removed: List[str]
 ) -> None:
     """
-    installation_repositories event'i — şimdilik sadece updated_at dokunuşu
-    ve log. Repo erişim listesi tablosu Faz 2c kapsamında.
+    installation_repositories event'i — Repository tablosunu günceller ve
+    legacy installation logunu korur.
     """
     if not db_enabled():
         return
@@ -319,6 +319,24 @@ def create_review_run(installation_id: int, repository_id: int, pr_number: int, 
             session.flush()
             return row.id
     except Exception as e:
+        # A concurrent delivery can win the unique constraint between SELECT
+        # and INSERT. Re-read the durable run instead of turning that normal
+        # race into a 503.
+        try:
+            from sqlalchemy import select
+            from app.models import ReviewRun
+            with get_session() as session:
+                existing = session.scalar(
+                    select(ReviewRun).where(
+                        ReviewRun.repository_id == repository_id,
+                        ReviewRun.pr_number == pr_number,
+                        ReviewRun.head_sha == head_sha,
+                    )
+                )
+                if existing is not None:
+                    return existing.id
+        except Exception:
+            pass
         logger.error(f"⚠️ create_review_run başarısız (yutuldu): {e}")
         return None
 
