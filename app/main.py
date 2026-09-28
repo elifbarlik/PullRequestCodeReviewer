@@ -48,6 +48,12 @@ from app.repository import (
     set_installation_settings,
     get_detailed_metrics,
     check_rate_limit,
+    upsert_repository,
+    create_review_run,
+    update_review_run,
+    claim_webhook_delivery,
+    mark_webhook_delivery,
+    recover_stale_review_runs,
 )
 import json
 import hmac
@@ -134,6 +140,10 @@ async def _lifespan(_app: "FastAPI"):
     try:
         migrated = init_db()
         _startup_db_status = "ok" if migrated else "disabled"
+        if migrated:
+            recovered = recover_stale_review_runs()
+            if recovered:
+                logger.warning(f"♻️ {recovered} stale review run recovered as failed")
     except Exception as e:
         _startup_db_status = "error"
         logger.error(f"⚠️  Alembic startup migration başarısız: {e}")
@@ -820,20 +830,26 @@ async def metrics():
 # Webhook ana endpoint
 # -------------------------------------------------------------------
 
-# Faz 4.4: son işlenen X-GitHub-Delivery id'leri — GitHub bir webhook'a
-# 10 sn içinde 2xx alamazsa AYNI delivery'yi retry eder. Analiz arka planda
-# çalıştığı için artık 10 sn sorun değil, ama retry yine de gelebilir
-# (ağ gecikmesi). Bu LRU, aynı delivery'nin ikinci kez analiz edilip
-# mükerrer yorum atmasını önler. Process-local; tek instance için yeterli,
-# çok instance'a çıkılırsa Redis/DB'ye taşınır.
+# Durable DB-backed idempotency is the source of truth when DB is available.
+# Process-local LRU remains only as a fallback when DB is disabled/unreachable.
 _SEEN_DELIVERIES: "OrderedDict[str, float]" = OrderedDict()
 _SEEN_DELIVERIES_MAX = 500
 
 
-def _already_processed(delivery_id: str) -> bool:
-    """delivery_id daha önce görüldüyse True; görülmediyse kaydeder ve False döner."""
+def _already_processed(
+    delivery_id: str,
+    event_type: str = "",
+    action: str = "",
+    installation_id: Optional[int] = None,
+    repository_id: Optional[int] = None,
+) -> bool:
     if not delivery_id:
         return False
+    durable = claim_webhook_delivery(
+        delivery_id, event_type, action, installation_id, repository_id
+    )
+    if durable is not None:
+        return durable
     if delivery_id in _SEEN_DELIVERIES:
         return True
     _SEEN_DELIVERIES[delivery_id] = time.monotonic()
@@ -842,12 +858,29 @@ def _already_processed(delivery_id: str) -> bool:
     return False
 
 
-async def _process_pr_event_bg(action: str, payload: dict) -> None:
-    """pull_request analizini arka planda çalıştırır — hataları yutar."""
+async def _process_pr_event_bg(
+    action: str, payload: dict, delivery_id: str, review_run_id: Optional[int]
+) -> None:
+    """Run the PR review asynchronously and persist its lifecycle."""
+    update_review_run(review_run_id, "running")
     try:
-        await _handle_pull_request_event(action, payload)
+        result = await _handle_pull_request_event(
+            action, payload, review_run_id=review_run_id
+        )
+        security = result.get("analyses", {}).get("security", {}) if isinstance(result, dict) else {}
+        files_scanned = len(payload.get("pull_request", {}).get("changed_files") or [])
+        findings_count = len(security.get("vulnerabilities", [])) if isinstance(security, dict) else 0
+        update_review_run(
+            review_run_id,
+            "completed",
+            files_scanned=files_scanned,
+            findings_count=findings_count,
+        )
+        mark_webhook_delivery(delivery_id, "processed")
     except Exception as e:
         logger.error(f"❌ Arka plan PR analizi başarısız: {e}")
+        update_review_run(review_run_id, "failed", error=str(e))
+        mark_webhook_delivery(delivery_id, "failed", error=str(e))
         if sentry_sdk is not None:
             sentry_sdk.capture_exception(e)
 
@@ -882,23 +915,91 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
 
         logger.info(f"🔔 Webhook: event={event_type} action={action} delivery={delivery_id}")
 
-        if _already_processed(delivery_id):
+        installation_id = payload.get("installation", {}).get("id")
+        repository_data = payload.get("repository", {})
+        repository_id = repository_data.get("id")
+
+        if _already_processed(
+            delivery_id,
+            event_type=event_type,
+            action=action,
+            installation_id=installation_id,
+            repository_id=repository_id,
+        ):
             logger.info(f"↩️  Mükerrer delivery, atlanıyor: {delivery_id}")
             return {"status": "duplicate", "delivery": delivery_id}
 
-        # ── installation event'leri (hızlı, senkron) ─────────────────
         if event_type == "installation":
-            return await _handle_installation_event(action, payload)
+            try:
+                result = await _handle_installation_event(action, payload)
+                mark_webhook_delivery(delivery_id, "processed")
+                return result
+            except Exception as e:
+                mark_webhook_delivery(delivery_id, "failed", str(e))
+                raise
 
         if event_type == "installation_repositories":
-            return await _handle_installation_repositories_event(action, payload)
+            try:
+                result = await _handle_installation_repositories_event(action, payload)
+                mark_webhook_delivery(delivery_id, "processed")
+                return result
+            except Exception as e:
+                mark_webhook_delivery(delivery_id, "failed", str(e))
+                raise
 
-        # ── pull_request (uzun, arka planda) ─────────────────────────
         if event_type == "pull_request":
             if action not in ("opened", "synchronize"):
+                mark_webhook_delivery(delivery_id, "ignored")
                 return {"status": "ignored", "reason": f"pull_request.{action} analiz tetiklemez"}
-            background_tasks.add_task(_process_pr_event_bg, action, payload)
-            return {"status": "accepted", "event": "pull_request", "action": action}
+
+            owner = repository_data.get("owner", {}).get("login")
+            repo_name = repository_data.get("name")
+            pr = payload.get("pull_request", {})
+            pr_number = pr.get("number")
+            head_sha = pr.get("head", {}).get("sha")
+            account = payload.get("installation", {}).get("account", {})
+            account_login = account.get("login") or owner or "unknown"
+            account_type = account.get("type") or repository_data.get("owner", {}).get("type") or "unknown"
+
+            if not all([installation_id, repository_id, owner, repo_name, pr_number, head_sha]):
+                mark_webhook_delivery(delivery_id, "failed", "Missing pull_request identity fields")
+                raise HTTPException(status_code=400, detail="Invalid pull_request payload")
+
+            ensure_installation(
+                installation_id,
+                account_login=account_login,
+                account_type=account_type,
+            )
+            repo_row_id = upsert_repository(
+                installation_id=installation_id,
+                github_repository_id=repository_id,
+                owner=owner,
+                name=repo_name,
+                full_name=repository_data.get("full_name") or f"{owner}/{repo_name}",
+            )
+            if repo_row_id is None:
+                mark_webhook_delivery(delivery_id, "failed", "Repository persistence unavailable")
+                raise HTTPException(status_code=503, detail="Repository persistence unavailable")
+
+            review_run_id = create_review_run(
+                installation_id=installation_id,
+                repository_id=repo_row_id,
+                pr_number=pr_number,
+                head_sha=head_sha,
+            )
+            if review_run_id is None:
+                mark_webhook_delivery(delivery_id, "failed", "Review run persistence unavailable")
+                raise HTTPException(status_code=503, detail="Review run persistence unavailable")
+
+            background_tasks.add_task(
+                _process_pr_event_bg, action, payload, delivery_id, review_run_id
+            )
+            return {
+                "status": "accepted",
+                "event": "pull_request",
+                "action": action,
+                "review_run_id": review_run_id,
+            }
 
         return {"status": "ignored", "reason": f"'{event_type}' event'i desteklenmiyor"}
 
@@ -990,7 +1091,9 @@ async def _handle_installation_repositories_event(action: str, payload: dict) ->
     }
 
 
-async def _handle_pull_request_event(action: str, payload: dict) -> dict:
+async def _handle_pull_request_event(
+    action: str, payload: dict, review_run_id: Optional[int] = None
+) -> dict:
     """
     Pull request event'ini işler.
 
