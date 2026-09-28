@@ -118,7 +118,7 @@ jobs:
         assert not missing, f"Missing migrated tables: {sorted(missing)}"
         with engine.connect() as conn:
             revision = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert revision == "0001_baseline_schema", revision
+        assert revision == "0002_review_cost_metrics", revision
         print("Alembic migration verified:", revision)
         PY
 
