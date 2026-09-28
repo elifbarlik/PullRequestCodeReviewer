@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="965" height="482" viewBox="0 0 965 482" role="img" aria-labelledby="title desc">
+  <title id="title">SecPR-TR Marketplace feature card</title>
+  <desc id="desc">SecPR-TR GitHub Pull Request security review</desc>
+  <rect width="965" height="482" fill="#080b10"/>
+  <circle cx="815" cy="110" r="190" fill="#10151d"/>
+  <circle cx="815" cy="110" r="130" fill="none" stroke="#8df0c0" stroke-width="5" opacity=".45"/>
+  <path d="M155 95 235 125v68c0 54-33 92-80 117-47-25-80-63-80-117v-68l80-30Z" fill="#10151d" stroke="#8df0c0" stroke-width="8"/>
+  <path d="m119 196 27 27 63-63" fill="none" stroke="#8df0c0" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="315" y="170" font-family="Arial, Helvetica, sans-serif" font-size="56" font-weight="800" fill="#edf2f7">SecPR-TR</text>
+  <text x="315" y="222" font-family="Arial, Helvetica, sans-serif" font-size="28" fill="#8df0c0">GitHub Pull Request Security Review</text>
+  <text x="315" y="274" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#8793a3">Semgrep + Gemini · Türkçe · Inline review</text>
+  <text x="315" y="322" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#8793a3">Security findings mapped to changed PR lines</text>
+</svg>
