@@ -39,12 +39,13 @@ def test_webhook_delivery_is_durable_and_idempotent(db):
 
     mark_webhook_delivery("delivery-1", "processed")
 
-    with db.connect() as conn:
-        row = conn.execute(
+    Session = __import__("sqlalchemy.orm", fromlist=["sessionmaker"]).sessionmaker(bind=db, future=True)
+    with Session() as session:
+        row = session.scalar(
             select(WebhookDelivery).where(WebhookDelivery.delivery_id == "delivery-1")
-        ).one()
-    assert row.status == "processed"
-    assert row.processed_at is not None
+        )
+        assert row.status == "processed"
+        assert row.processed_at is not None
 
 
 def test_review_run_has_persistent_lifecycle(db):
@@ -64,22 +65,22 @@ def test_review_run_has_persistent_lifecycle(db):
     update_review_run(run_id, "running", files_scanned=3)
     update_review_run(run_id, "completed", findings_count=2)
 
-    with db.connect() as conn:
-        row = conn.execute(
-            select(ReviewRun).where(ReviewRun.id == run_id)
-        ).one()
-    assert row.status == "completed"
-    assert row.started_at is not None
-    assert row.completed_at is not None
-    assert row.files_scanned == 3
-    assert row.findings_count == 2
+    Session = __import__("sqlalchemy.orm", fromlist=["sessionmaker"]).sessionmaker(bind=db, future=True)
+    with Session() as session:
+        row = session.scalar(select(ReviewRun).where(ReviewRun.id == run_id))
+        assert row.status == "completed"
+        assert row.started_at is not None
+        assert row.completed_at is not None
+        assert row.files_scanned == 3
+        assert row.findings_count == 2
 
 
 def test_repository_upsert_is_idempotent(db):
     upsert_repository(100, 200, "test-org", "repo", "test-org/repo")
     upsert_repository(100, 200, "test-org", "repo-renamed", "test-org/repo-renamed")
 
-    with db.connect() as conn:
-        rows = conn.execute(select(Repository)).all()
+    Session = __import__("sqlalchemy.orm", fromlist=["sessionmaker"]).sessionmaker(bind=db, future=True)
+    with Session() as session:
+        rows = session.scalars(select(Repository)).all()
     assert len(rows) == 1
     assert rows[0].name == "repo-renamed"
