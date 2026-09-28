@@ -29,6 +29,7 @@ RUN mkdir -p /tmp/warm && echo "x = 1" > /tmp/warm/warm.py && \
     rm -rf /tmp/warm
 
 COPY app/ ./app/
+COPY static/ ./static/
 
 EXPOSE 8000
 
