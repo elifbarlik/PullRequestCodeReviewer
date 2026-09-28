@@ -122,8 +122,8 @@ def update_installation_repos(
     installation_id: int, added: List[str], removed: List[str]
 ) -> None:
     """
-    installation_repositories event'i — şimdilik sadece updated_at dokunuşu
-    ve log. Repo erişim listesi tablosu Faz 2c kapsamında.
+    installation_repositories event'i — Repository tablosunu günceller ve
+    legacy installation logunu korur.
     """
     if not db_enabled():
         return
