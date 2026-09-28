@@ -338,6 +338,35 @@ def set_installation_settings(
         return None
 
 
+def check_rate_limit(installation_id: int, limit_per_hour: int = 50) -> bool:
+    """Return True when the installation is below its rolling hourly PR-review limit."""
+    if limit_per_hour <= 0 or not db_enabled():
+        return True
+    try:
+        from datetime import datetime, timedelta, timezone
+        from sqlalchemy import func, select
+        from app.models import UsageLog
+
+        one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+        with get_session() as session:
+            count = session.scalar(
+                select(func.count())
+                .select_from(UsageLog)
+                .where(
+                    UsageLog.installation_id == installation_id,
+                    UsageLog.created_at >= one_hour_ago,
+                )
+            ) or 0
+        return int(count) < int(limit_per_hour)
+    except Exception as e:
+        # Fail-open for availability: a DB outage must not turn into a GitHub
+        # webhook failure or a silent denial of service for legitimate users.
+        logger.error(
+            f"⚠️  Rate limit kontrolü başarısız (izin veriliyor): {e}"
+        )
+        return True
+
+
 def get_detailed_metrics() -> Optional[Dict[str, Any]]:
     """Operational and cost metrics for the dashboard/metrics endpoint."""
     if not db_enabled():
@@ -359,9 +388,6 @@ def get_detailed_metrics() -> Optional[Dict[str, Any]]:
             reviews_7d = session.scalar(
                 select(func.count()).select_from(UsageLog).where(UsageLog.created_at >= week_ago)
             ) or 0
-            avg_duration_24h = session.scalar(
-                select(func.avg(UsageLog.duration_ms)).where(UsageLog.created_at >= day_ago)
-            )
             findings_24h = session.scalar(
                 select(func.count()).select_from(Finding).where(Finding.created_at >= day_ago)
             ) or 0
@@ -386,10 +412,60 @@ def get_detailed_metrics() -> Optional[Dict[str, Any]]:
                 .where(UsageLog.created_at >= month_start)
             ) or 0
 
+            recent_rows = session.execute(
+                select(
+                    UsageLog.duration_ms,
+                    UsageLog.t_github_ms,
+                    UsageLog.t_semgrep_ms,
+                    UsageLog.t_gemini_ms,
+                    UsageLog.semgrep_status,
+                ).where(UsageLog.created_at >= day_ago)
+            ).all()
+
+        durations = sorted(
+            int(row.duration_ms)
+            for row in recent_rows
+            if row.duration_ms is not None
+        )
+
+        def _percentile(values: list[int], percentile: float) -> float:
+            if not values:
+                return 0.0
+            if len(values) == 1:
+                return float(values[0])
+            rank = (len(values) - 1) * percentile
+            lower = int(rank)
+            upper = min(lower + 1, len(values) - 1)
+            weight = rank - lower
+            return values[lower] + (values[upper] - values[lower]) * weight
+
+        def _avg(field: str) -> float:
+            values = [
+                int(getattr(row, field))
+                for row in recent_rows
+                if getattr(row, field) is not None
+            ]
+            return round(sum(values) / len(values), 1) if values else 0.0
+
+        review_count_24h = len(recent_rows)
+        semgrep_unavailable_24h = sum(
+            1 for row in recent_rows if row.semgrep_status == "unavailable"
+        )
+
         return {
             "reviews_last_24h": reviews_24h,
             "reviews_last_7d": reviews_7d,
-            "avg_duration_ms_24h": round(float(avg_duration_24h), 1) if avg_duration_24h is not None else 0,
+            "avg_duration_ms_24h": round(sum(durations) / len(durations), 1) if durations else 0.0,
+            "p50_duration_ms_24h": round(_percentile(durations, 0.50), 1),
+            "p95_duration_ms_24h": round(_percentile(durations, 0.95), 1),
+            "avg_timing_ms_24h": {
+                "github": _avg("t_github_ms"),
+                "semgrep_and_summary": _avg("t_semgrep_ms"),
+                "gemini_detail": _avg("t_gemini_ms"),
+            },
+            "semgrep_unavailable_rate_pct_24h": round(
+                (semgrep_unavailable_24h / review_count_24h) * 100, 1
+            ) if review_count_24h else 0.0,
             "findings_last_24h": findings_24h,
             "gemini_cost_usd_month": round(float(month_cost), 8),
             "gemini_input_tokens_month": int(month_input_tokens),

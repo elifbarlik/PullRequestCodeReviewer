@@ -47,6 +47,7 @@ from app.repository import (
     get_installation_settings,
     set_installation_settings,
     get_detailed_metrics,
+    check_rate_limit,
 )
 import json
 import hmac
@@ -60,13 +61,61 @@ import shutil
 
 from sqlalchemy import text
 
+try:
+    import sentry_sdk
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+    from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+except ImportError:  # pragma: no cover - dependency is installed in production
+    sentry_sdk = None
+    FastApiIntegration = None
+    SqlalchemyIntegration = None
+
+try:
+    from pythonjsonlogger.json import JsonFormatter
+except ImportError:
+    try:
+        from pythonjsonlogger.jsonlogger import JsonFormatter
+    except ImportError:  # optional locally; production image installs it
+        JsonFormatter = None
+
 load_dotenv()
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+def _configure_logging() -> None:
+    log_format = os.getenv("LOG_FORMAT", "text").strip().lower()
+    if log_format == "json" and JsonFormatter is not None:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            JsonFormatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+        )
+        logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
+    elif log_format == "json":
+        logging.basicConfig(level=logging.INFO)
+        logging.getLogger(__name__).warning(
+            "LOG_FORMAT=json requested but python-json-logger is not installed; using text logs"
+        )
+    else:
+        logging.basicConfig(level=logging.INFO)
+
+
+_configure_logging()
 logger = logging.getLogger(__name__)
 
 APP_VERSION = "0.5.0"
+HOURLY_PR_LIMIT = max(1, int(os.getenv("HOURLY_PR_LIMIT", "50")))
+
+_SENTRY_DSN = os.getenv("SENTRY_DSN", "").strip()
+if _SENTRY_DSN and sentry_sdk is not None:
+    sentry_sdk.init(
+        dsn=_SENTRY_DSN,
+        integrations=[
+            FastApiIntegration(),
+            SqlalchemyIntegration(),
+        ],
+        traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+        environment=os.getenv("FLY_APP_NAME", os.getenv("ENVIRONMENT", "local")),
+        release=f"secpr-tr@{APP_VERSION}",
+        send_default_pii=False,
+    )
 # Startup migration state is intentionally kept separate from the live
 # database connectivity check exposed by /health.
 _startup_db_status = "not_started"
@@ -495,6 +544,30 @@ async def _run_pr_review(
     # Installation'a özgü client — kendi installation token'ını yönetir
     client = GitHubAppClient(installation_id=installation_id)
 
+    if not check_rate_limit(installation_id, HOURLY_PR_LIMIT):
+        logger.warning(
+            f"⚠️ Saatlik PR analiz limiti aşıldı: installation={installation_id} "
+            f"limit={HOURLY_PR_LIMIT}"
+        )
+        client.post_pr_comment(
+            owner=owner,
+            repo=repo,
+            pr_number=pr_number,
+            body=(
+                "⏳ **SecPR-TR:** Bu installation için saatlik otomatik PR "
+                f"analiz limiti ({HOURLY_PR_LIMIT}) doldu. Bir sonraki saat "
+                "içinde yeni analiz başlatılmayacaktır."
+            ),
+        )
+        return {
+            "status": "rate_limited",
+            "message": "Saatlik PR analiz limitine ulaşıldı",
+            "owner": owner,
+            "repo": repo,
+            "pr_number": pr_number,
+            "limit_per_hour": HOURLY_PR_LIMIT,
+        }
+
     # Faz 4.4: diff + details + files → TEK SEFERDE paralel çek (3 → ~1 round-trip)
     logger.info(f"📥 PR verisi alınıyor (paralel): {owner}/{repo}#{pr_number}")
     t_gh_start = time.monotonic()
@@ -729,6 +802,8 @@ async def _process_pr_event_bg(action: str, payload: dict) -> None:
         await _handle_pull_request_event(action, payload)
     except Exception as e:
         logger.error(f"❌ Arka plan PR analizi başarısız: {e}")
+        if sentry_sdk is not None:
+            sentry_sdk.capture_exception(e)
 
 
 @app.post("/webhook")
@@ -785,6 +860,8 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
         raise
     except Exception as e:
         logger.error(f"❌ Webhook hatası: {str(e)}")
+        if sentry_sdk is not None:
+            sentry_sdk.capture_exception(e)
         return {"status": "error", "message": str(e)}
 
 

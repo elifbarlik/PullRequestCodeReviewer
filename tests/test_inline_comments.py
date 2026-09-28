@@ -261,3 +261,14 @@ class TestRunPrReviewInlineFlow:
 
         assert set(res["timing_ms"]) == {"total", "github", "semgrep_and_summary", "gemini_detail"}
         assert all(isinstance(v, int) for v in res["timing_ms"].values())
+
+
+def test_rate_limited_review(monkeypatch, fake_github_client):
+    holder = fake_github_client()
+    monkeypatch.setattr(main, "check_rate_limit", lambda *a, **k: False)
+    result = asyncio.run(main._run_pr_review(
+        installation_id=1, owner="o", repo="r", pr_number=5,
+        review_types=["short_summary", "security"], action="opened",
+    ))
+    assert result["status"] == "rate_limited"
+    assert len(holder.client.recorder["post_pr_comment"]) == 1
