@@ -173,7 +173,7 @@ def test_large_pr_uses_large_timeout(monkeypatch):
 def test_large_diff_is_truncated_to_budget():
     from app.reviewer import truncate_diff, TokenManager
 
-    diff = "\n".join(f"+line_{i}" for i in range(10000))
+    diff = "\n".join(f"+line_{i}" for i in range(20000))
     truncated = truncate_diff(diff)
     assert len(truncated) <= TokenManager.get_max_diff_length()
-    assert "Diff truncated" in truncated or len(truncated) < len(diff)
+    assert len(truncated) < len(diff)
