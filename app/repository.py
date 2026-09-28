@@ -294,9 +294,27 @@ def create_review_run(installation_id: int, repository_id: int, pr_number: int, 
     if not db_enabled():
         return None
     try:
+        from sqlalchemy import select
         from app.models import ReviewRun
         with get_session() as session:
-            row = ReviewRun(installation_id=installation_id, repository_id=repository_id, pr_number=pr_number, head_sha=head_sha, status="queued")
+            existing = session.scalar(
+                select(ReviewRun).where(
+                    ReviewRun.repository_id == repository_id,
+                    ReviewRun.pr_number == pr_number,
+                    ReviewRun.head_sha == head_sha,
+                )
+            )
+            if existing is not None:
+                # Same PR head can arrive through a repeated synchronize delivery.
+                # Reuse the durable run rather than creating a second review.
+                return existing.id
+            row = ReviewRun(
+                installation_id=installation_id,
+                repository_id=repository_id,
+                pr_number=pr_number,
+                head_sha=head_sha,
+                status="queued",
+            )
             session.add(row)
             session.flush()
             return row.id
