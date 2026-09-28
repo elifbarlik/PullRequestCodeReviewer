@@ -1,6 +1,7 @@
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 from app.db import _reset_for_tests
 from app.models import Base, Installation, Repository, ReviewRun, WebhookDelivery
@@ -39,7 +40,7 @@ def test_webhook_delivery_is_durable_and_idempotent(db):
 
     mark_webhook_delivery("delivery-1", "processed")
 
-    Session = __import__("sqlalchemy.orm", fromlist=["sessionmaker"]).sessionmaker(bind=db, future=True)
+    Session = sessionmaker(bind=db, future=True)
     with Session() as session:
         row = session.scalar(
             select(WebhookDelivery).where(WebhookDelivery.delivery_id == "delivery-1")
