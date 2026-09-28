@@ -328,6 +328,24 @@ def _verify_admin_token(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Geçersiz admin token")
 
 
+@app.post("/admin/logging-test")
+async def admin_logging_test(request: Request):
+    """Emit one authenticated structured-log smoke-test record."""
+    _verify_admin_token(request)
+    logger.warning(
+        "SecPR-TR structured logging smoke test",
+        extra={
+            "secpr_smoke_test": True,
+            "app_version": APP_VERSION,
+        },
+    )
+    return {
+        "status": "logged",
+        "event": "structured-log-smoke-test",
+        "release": f"secpr-tr@{APP_VERSION}",
+    }
+
+
 @app.post("/admin/sentry-test")
 async def admin_sentry_test(request: Request):
     """Send one explicit, authenticated Sentry smoke-test event."""
