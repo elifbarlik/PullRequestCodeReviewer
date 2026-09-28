@@ -400,3 +400,23 @@ class TestRunPrReviewRegression:
             assert s.get(Installation, MISSING_ID) is not None      # lazy oluştu
             logs = s.query(UsageLog).filter_by(installation_id=MISSING_ID).all()
             assert len(logs) == 1                                   # FK hatası YOK
+
+
+def test_detailed_metrics_has_latency_stats(db_session):
+    repository.upsert_installation(888, "acme", "Organization", "all")
+    for index, duration in enumerate((100, 200, 300), start=1):
+        repository.record_usage(
+            installation_id=888,
+            owner="acme",
+            repo="web",
+            pr_number=index,
+            duration_ms=duration,
+            t_github_ms=10,
+            t_semgrep_ms=20,
+            t_gemini_ms=30,
+            semgrep_status="ok",
+        )
+    metrics = repository.get_detailed_metrics()
+    assert metrics["p50_duration_ms_24h"] == 200.0
+    assert metrics["p95_duration_ms_24h"] == 290.0
+    assert metrics["avg_timing_ms_24h"]["github"] == 10.0
