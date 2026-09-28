@@ -155,6 +155,14 @@ def record_usage(
     finding_count: int = 0,
     parse_success: Optional[bool] = None,
     duration_ms: Optional[int] = None,
+    t_github_ms: Optional[int] = None,
+    t_semgrep_ms: Optional[int] = None,
+    t_gemini_ms: Optional[int] = None,
+    input_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None,
+    gemini_cost_usd: Optional[float] = None,
+    llm_calls: Optional[int] = None,
+    llm_cache_hits: Optional[int] = None,
 ) -> Optional[int]:
     """
     Bir PR analizini usage_logs'a yazar.
@@ -181,6 +189,14 @@ def record_usage(
                 finding_count=finding_count,
                 parse_success=parse_success,
                 duration_ms=duration_ms,
+                t_github_ms=t_github_ms,
+                t_semgrep_ms=t_semgrep_ms,
+                t_gemini_ms=t_gemini_ms,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                gemini_cost_usd=gemini_cost_usd,
+                llm_calls=llm_calls,
+                llm_cache_hits=llm_cache_hits,
             )
             session.add(log)
             session.flush()  # id'yi al
@@ -319,6 +335,71 @@ def set_installation_settings(
         return result
     except Exception as e:
         logger.error(f"⚠️  set_installation_settings başarısız (yutuldu): {e}")
+        return None
+
+
+def get_detailed_metrics() -> Optional[Dict[str, Any]]:
+    """Operational and cost metrics for the dashboard/metrics endpoint."""
+    if not db_enabled():
+        return None
+    try:
+        from datetime import datetime, timedelta, timezone
+        from sqlalchemy import func, select
+        from app.models import Finding, UsageLog
+
+        now = datetime.now(timezone.utc)
+        day_ago = now - timedelta(hours=24)
+        week_ago = now - timedelta(days=7)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        with get_session() as session:
+            reviews_24h = session.scalar(
+                select(func.count()).select_from(UsageLog).where(UsageLog.created_at >= day_ago)
+            ) or 0
+            reviews_7d = session.scalar(
+                select(func.count()).select_from(UsageLog).where(UsageLog.created_at >= week_ago)
+            ) or 0
+            avg_duration_24h = session.scalar(
+                select(func.avg(UsageLog.duration_ms)).where(UsageLog.created_at >= day_ago)
+            )
+            findings_24h = session.scalar(
+                select(func.count()).select_from(Finding).where(Finding.created_at >= day_ago)
+            ) or 0
+            month_cost = session.scalar(
+                select(func.coalesce(func.sum(UsageLog.gemini_cost_usd), 0.0))
+                .where(UsageLog.created_at >= month_start)
+            ) or 0.0
+            month_input_tokens = session.scalar(
+                select(func.coalesce(func.sum(UsageLog.input_tokens), 0))
+                .where(UsageLog.created_at >= month_start)
+            ) or 0
+            month_output_tokens = session.scalar(
+                select(func.coalesce(func.sum(UsageLog.output_tokens), 0))
+                .where(UsageLog.created_at >= month_start)
+            ) or 0
+            cache_hits = session.scalar(
+                select(func.coalesce(func.sum(UsageLog.llm_cache_hits), 0))
+                .where(UsageLog.created_at >= month_start)
+            ) or 0
+            llm_calls = session.scalar(
+                select(func.coalesce(func.sum(UsageLog.llm_calls), 0))
+                .where(UsageLog.created_at >= month_start)
+            ) or 0
+
+        return {
+            "reviews_last_24h": reviews_24h,
+            "reviews_last_7d": reviews_7d,
+            "avg_duration_ms_24h": round(float(avg_duration_24h), 1) if avg_duration_24h is not None else 0,
+            "findings_last_24h": findings_24h,
+            "gemini_cost_usd_month": round(float(month_cost), 8),
+            "gemini_input_tokens_month": int(month_input_tokens),
+            "gemini_output_tokens_month": int(month_output_tokens),
+            "llm_calls_month": int(llm_calls),
+            "llm_cache_hits_month": int(cache_hits),
+            "llm_cache_hit_rate_pct_month": round((cache_hits / llm_calls) * 100, 1) if llm_calls else 0.0,
+        }
+    except Exception as e:
+        logger.error(f"⚠️  get_detailed_metrics başarısız: {e}")
         return None
 
 

@@ -123,4 +123,116 @@ def clamp_output_tokens(requested: int) -> int:
     return min(max(1, int(requested)), global_limit)
 
 
+# Google AI Studio / Gemini Developer API standard text pricing used by the
+# default production model. Values are USD per 1M tokens and are intentionally
+# configurable because pricing can change and custom models may be used.
+# Current defaults for gemini-2.5-flash are documented by Google:
+# input $0.30 / 1M, output $2.50 / 1M.
+# See: https://ai.google.dev/gemini-api/docs/pricing
+_DEFAULT_PRICING = {
+    "gemini-2.5-flash": (0.30, 2.50),
+    "gemini-2.5-flash-lite": (0.10, 0.40),
+}
+
+
+def _price_per_million(model: str, kind: str) -> Optional[float]:
+    env_name = (
+        "GEMINI_INPUT_PRICE_PER_1M"
+        if kind == "input"
+        else "GEMINI_OUTPUT_PRICE_PER_1M"
+    )
+    raw = os.getenv(env_name, "").strip()
+    if raw:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            pass
+
+    prices = _DEFAULT_PRICING.get(model)
+    if prices is None:
+        return None
+    return prices[0] if kind == "input" else prices[1]
+
+
+def estimate_gemini_cost(
+    input_text: str,
+    output_text: str,
+    *,
+    model: str,
+    input_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None,
+) -> dict:
+    """Estimate token usage and USD cost for one Gemini request.
+
+    Prefer provider-reported token counts when available; otherwise fall back
+    to the project's conservative 4-chars-per-token estimate.
+    """
+    input_tokens = input_tokens or max(1, int(len(input_text) * 0.25))
+    output_tokens = output_tokens or max(1, int(len(output_text) * 0.25))
+
+    input_price = _price_per_million(model, "input")
+    output_price = _price_per_million(model, "output")
+    cost_usd = None
+    if input_price is not None and output_price is not None:
+        cost_usd = round(
+            (input_tokens / 1_000_000) * input_price
+            + (output_tokens / 1_000_000) * output_price,
+            8,
+        )
+
+    return {
+        "input_tokens": int(input_tokens),
+        "output_tokens": int(output_tokens),
+        "total_tokens": int(input_tokens + output_tokens),
+        "cost_usd": cost_usd,
+        "pricing_known": cost_usd is not None,
+    }
+
+
+@dataclass
+class LLMUsageCollector:
+    """Thread-safe per-review LLM usage accumulator.
+
+    A collector is passed through the review pipeline so concurrent stage-1
+    and Semgrep work cannot mix usage from different PR reviews.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    calls: int = 0
+    cache_hits: int = 0
+    pricing_unknown_calls: int = 0
+
+    def __post_init__(self) -> None:
+        self._lock = Lock()
+
+    def record_api_call(self, usage: dict) -> None:
+        with self._lock:
+            self.calls += 1
+            self.input_tokens += int(usage.get("input_tokens", 0))
+            self.output_tokens += int(usage.get("output_tokens", 0))
+            if usage.get("cost_usd") is None:
+                self.pricing_unknown_calls += 1
+            else:
+                self.cost_usd += float(usage["cost_usd"])
+
+    def record_cache_hit(self) -> None:
+        with self._lock:
+            self.cache_hits += 1
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "model": os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+                "input_tokens": self.input_tokens,
+                "output_tokens": self.output_tokens,
+                "total_tokens": self.input_tokens + self.output_tokens,
+                "cost_usd": None if self.pricing_unknown_calls else round(self.cost_usd, 8),
+                "calls": self.calls,
+                "cache_hits": self.cache_hits,
+                "pricing_unknown_calls": self.pricing_unknown_calls,
+            }
+
+
 llm_response_cache = LLMResponseCache()

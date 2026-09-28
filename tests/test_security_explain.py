@@ -135,7 +135,7 @@ class TestReviewDiffSecurityScanRouting:
         monkeypatch.setattr(reviewer, "build_security_result", fake_build_security_result)
         monkeypatch.setattr(
             reviewer, "analyze_diff_stage2",
-            lambda diff, types: {"security": {"vulnerabilities": [], "has_security_issues": False, "security_level": "safe"}},
+            lambda diff, types, **kwargs: {"security": {"vulnerabilities": [], "has_security_issues": False, "security_level": "safe"}},
         )
 
         result = reviewer.review_diff("diff", review_types=["short_summary", "security"], security_scan=None)
@@ -150,7 +150,7 @@ class TestReviewDiffSecurityScanRouting:
         )
         called = {"n": 0}
 
-        def fake_build_security_result(scan, diff):
+        def fake_build_security_result(scan, diff, **kwargs):
             called["n"] += 1
             return {"vulnerabilities": [], "has_security_issues": False, "security_level": "safe"}
 

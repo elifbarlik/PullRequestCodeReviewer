@@ -67,6 +67,14 @@ class UsageLog(Base):
     finding_count: Mapped[int] = mapped_column(Integer, default=0)
     parse_success: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    t_github_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    t_semgrep_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    t_gemini_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    gemini_cost_usd: Mapped[float | None] = mapped_column(nullable=True)
+    llm_calls: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    llm_cache_hits: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, index=True
     )

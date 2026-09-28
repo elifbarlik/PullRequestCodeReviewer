@@ -15,7 +15,13 @@ from dotenv import load_dotenv
 import os
 from google import genai
 from google.genai import types
-from app.cost_control import build_cache_key, clamp_output_tokens, llm_response_cache
+from app.cost_control import (
+    LLMUsageCollector,
+    build_cache_key,
+    clamp_output_tokens,
+    estimate_gemini_cost,
+    llm_response_cache,
+)
 
 load_dotenv()
 
@@ -139,6 +145,7 @@ def call_llm(
     max_tokens: int = 500,
     temperature: float = 0.1,
     use_json_mode: bool = True,
+    usage: Optional[LLMUsageCollector] = None,
 ) -> str:
     """
     Gemini API çağrısı — hata yönetimiyle.
@@ -159,6 +166,8 @@ def call_llm(
         cached_response = llm_response_cache.get(cache_key)
         if cached_response is not None:
             logger.info(f"♻️ LLM cache hit: {prompt_name}")
+            if usage is not None:
+                usage.record_cache_hit()
             return cached_response
 
         gen_config_kwargs = {
@@ -185,6 +194,20 @@ def call_llm(
         response_text = (response.text or "").strip()
         if not response_text:
             raise Exception("Gemini boş yanıt döndürdü")
+
+        if usage is not None:
+            metadata = getattr(response, "usage_metadata", None)
+            reported_input = getattr(metadata, "prompt_token_count", None) if metadata else None
+            reported_output = getattr(metadata, "candidates_token_count", None) if metadata else None
+            usage.record_api_call(
+                estimate_gemini_cost(
+                    prompt,
+                    response_text,
+                    model=model_name,
+                    input_tokens=reported_input,
+                    output_tokens=reported_output,
+                )
+            )
 
         logger.info(f"📥 Yanıt alındı ({len(response_text)} karakter)")
         llm_response_cache.set(cache_key, response_text)
@@ -227,7 +250,7 @@ def parse_llm_response(
 # ============= TWO-STAGE ANALYSIS =============
 
 
-def analyze_diff_stage1(diff_text: str) -> Optional[Dict[str, Any]]:
+def analyze_diff_stage1(diff_text: str, usage: Optional[LLMUsageCollector] = None) -> Optional[Dict[str, Any]]:
     """
     Stage 1: Quick summary analysis (fast, low tokens)
 
@@ -248,6 +271,7 @@ def analyze_diff_stage1(diff_text: str) -> Optional[Dict[str, Any]]:
             config["max_tokens"],
             config.get("temperature", 0.1),
             use_json_mode=False,   # kısa özet: serbest metin modu
+            usage=usage,
         )
         logger.info(f"🔎 SHORT_SUMMARY ham yanıt ({len(response)} karakter): {repr(response)}")
         result = parse_llm_response(response, "short_summary")
@@ -259,7 +283,7 @@ def analyze_diff_stage1(diff_text: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def analyze_diff_stage2(diff_text: str, review_types: List[str]) -> Dict[str, Any]:
+def analyze_diff_stage2(diff_text: str, review_types: List[str], usage: Optional[LLMUsageCollector] = None) -> Dict[str, Any]:
     """
     Stage 2: Detailed analysis (can use more tokens)
 
@@ -289,7 +313,7 @@ def analyze_diff_stage2(diff_text: str, review_types: List[str]) -> Dict[str, An
             prompt = get_prompt(prompt_name, diff_text=full_diff)
             config = get_prompt_config(prompt_name)
 
-            response = call_llm(prompt, prompt_name, config["max_tokens"], config.get("temperature", 0.1))
+            response = call_llm(prompt, prompt_name, config["max_tokens"], config.get("temperature", 0.1), usage=usage)
             result = parse_llm_response(response, review_type)
 
             if result:
@@ -313,7 +337,7 @@ _SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
 
 def explain_security_findings(
-    findings: List[Dict[str, Any]], diff_text: str
+    findings: List[Dict[str, Any]], diff_text: str, usage: Optional[LLMUsageCollector] = None
 ) -> Dict[str, Any]:
     """
     Semgrep'in deterministik olarak bulduğu güvenlik açıklarını Türkçe ve
@@ -364,7 +388,7 @@ def explain_security_findings(
         )
         config = get_prompt_config("SECURITY_EXPLAIN")
         response = call_llm(
-            prompt, "SECURITY_EXPLAIN", config["max_tokens"], config.get("temperature", 0.2)
+            prompt, "SECURITY_EXPLAIN", config["max_tokens"], config.get("temperature", 0.2), usage=usage
         )
         parsed = parse_llm_response(response, "security_explain")
         if parsed and isinstance(parsed.get("explanations"), list):
@@ -402,7 +426,7 @@ def explain_security_findings(
     }
 
 
-def build_security_result(security_scan: Optional[Dict[str, Any]], diff_text: str) -> Dict[str, Any]:
+def build_security_result(security_scan: Optional[Dict[str, Any]], diff_text: str, usage: Optional[LLMUsageCollector] = None) -> Dict[str, Any]:
     """
     main.py'den gelen Semgrep tarama sonucunu ("status": ok/unavailable/error)
     review_diff'in beklediği security analiz sonucuna çevirir.
@@ -415,7 +439,7 @@ def build_security_result(security_scan: Optional[Dict[str, Any]], diff_text: st
     status = security_scan.get("status") if security_scan else "unavailable"
 
     if status == "ok":
-        return explain_security_findings(security_scan.get("findings") or [], diff_text)
+        return explain_security_findings(security_scan.get("findings") or [], diff_text, usage=usage)
 
     return {
         "vulnerabilities": [],
@@ -433,6 +457,7 @@ def review_diff(
     review_types: List[str] = None,
     security_scan: Optional[Dict[str, Any]] = None,
     precomputed_summary: Optional[Dict[str, Any]] = None,
+    usage: Optional[LLMUsageCollector] = None,
 ) -> Dict[str, Any]:
     """
     Analyze diff using two-stage approach:
@@ -484,7 +509,7 @@ def review_diff(
             stage1_result = precomputed_summary
         else:
             logger.info("📊 Stage 1: Summary analysis...")
-            stage1_result = analyze_diff_stage1(processed_diff)
+            stage1_result = analyze_diff_stage1(processed_diff, usage=usage)
 
         if stage1_result:
             results["analyses"]["short_summary"] = stage1_result
@@ -505,12 +530,12 @@ def review_diff(
     # LLM-only SECURITY_REVIEW'a düşer — aşağıdaki analyze_diff_stage2 listesinde kalır.
     if "security" in detail_types and security_scan is not None:
         detail_types = [rt for rt in detail_types if rt != "security"]
-        results["analyses"]["security"] = build_security_result(security_scan, processed_diff)
+        results["analyses"]["security"] = build_security_result(security_scan, processed_diff, usage=usage)
         results["metadata"]["stages_completed"].append("security_semgrep")
 
     if detail_types:
         logger.info(f"🔬 Stage 2: Detailed analysis ({detail_types})...")
-        stage2_results = analyze_diff_stage2(processed_diff, detail_types)
+        stage2_results = analyze_diff_stage2(processed_diff, detail_types, usage=usage)
         results["analyses"].update(stage2_results)
         results["metadata"]["stages_completed"].append("stage2_detail")
         logger.info("✅ Stage 2 completed")
