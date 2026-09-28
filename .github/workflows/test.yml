@@ -2,7 +2,7 @@ name: Tests
 
 on:
   push:
-    branches: [ main, master, develop, feat/sprint-4-launch-hardening ]
+    branches: [ main, master, develop, feat/sprint-4-launch-hardening, feat/phase-2-cost-optimization ]
   pull_request:
     branches: [ main, master, develop ]
 
