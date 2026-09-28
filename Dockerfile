@@ -32,6 +32,7 @@ COPY app/ ./app/
 COPY static/ ./static/
 COPY alembic.ini ./
 COPY alembic/ ./alembic/
+COPY logging.json ./
 
 # Fail the image build if required runtime assets/migrations are missing.
 RUN test -f /app/static/index.html \
@@ -41,4 +42,4 @@ RUN test -f /app/static/index.html \
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --log-config /app/logging.json"]
