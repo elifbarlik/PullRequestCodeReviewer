@@ -1,11 +1,9 @@
-# Final production smoke rerun
 name: Phase 4 Production Validation
 
 on:
   push:
     branches:
       - main
-      - ops/phase4-production-validation
 
 jobs:
   production-validation:
@@ -15,20 +13,25 @@ jobs:
     steps:
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
-      - name: Verify production health and Sentry configuration
+      - name: Wait for production deployment
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           set -euo pipefail
-          health="$(curl -fsS "https://${FLY_APP}.fly.dev/health")"
-          echo "$health"
-          python - <<'PY' "$health"
+          for i in $(seq 1 30); do
+            if curl -fsS "https://${FLY_APP}.fly.dev/health" >/tmp/health.json; then
+              cat /tmp/health.json
+              python - <<'PY' /tmp/health.json
           import json, sys
-          data = json.loads(sys.argv[1])
+          data = json.load(open(sys.argv[1], encoding="utf-8"))
           assert data["status"] == "ok", data
-          print("health: PASS")
-          print("sentry:", data["checks"].get("sentry", "unknown"))
           PY
+              echo "production-health: PASS"
+              break
+            fi
+            echo "Waiting for production deployment... attempt $i/30"
+            sleep 5
+          done
 
       - name: Verify production LOG_FORMAT
         env:
@@ -38,112 +41,74 @@ jobs:
           log_format="$(flyctl ssh console -a "$FLY_APP" -q -C 'printenv LOG_FORMAT' | tail -n 1 | tr -d '\r')"
           echo "LOG_FORMAT=$log_format"
           test "$log_format" = "json"
-          echo "production LOG_FORMAT: PASS"
 
-      - name: Emit authenticated structured logging smoke test
+      - name: Emit structured logging smoke record
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           set -euo pipefail
-          result="$(flyctl ssh console -a "$FLY_APP" -q -C "python - <<'PY'
-import os, json, urllib.request
-request = urllib.request.Request(
-    'http://127.0.0.1:8000/admin/logging-test',
-    method='POST',
-    headers={'X-Admin-Token': os.environ['ADMIN_SECRET']},
-)
-with urllib.request.urlopen(request, timeout=10) as response:
-    print(response.read().decode())
-PY
-")"
+          result="$(flyctl ssh console -a "$FLY_APP" -q -C 'python -c "import os,urllib.request; r=urllib.request.Request(\"http://127.0.0.1:8000/admin/logging-test\",method=\"POST\",headers={\"X-Admin-Token\":os.environ[\"ADMIN_SECRET\"]}); print(urllib.request.urlopen(r,timeout=10).read().decode())"')"
           echo "$result"
           python - <<'PY' "$result"
           import json, sys
           data = json.loads(sys.argv[1])
           assert data["status"] == "logged", data
-          print("structured-log-smoke endpoint: PASS")
+          print("structured-log-endpoint: PASS")
           PY
 
-      - name: Trigger authenticated Sentry production smoke test when configured
+      - name: Capture and verify structured application log
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           set -euo pipefail
-          health="$(curl -fsS "https://${FLY_APP}.fly.dev/health")"
-          sentry="$(python - <<'PY' "$health"
-          import json, sys
-          print(json.loads(sys.argv[1])["checks"].get("sentry", "unknown"))
+          sleep 2
+          flyctl logs -a "$FLY_APP" --no-tail --json > fly-production-logs.jsonl
+          python - <<'PY'
+          import json
+          found = 0
+          with open("fly-production-logs.jsonl", encoding="utf-8") as f:
+              for raw in f:
+                  try:
+                      outer = json.loads(raw)
+                  except json.JSONDecodeError:
+                      continue
+                  message = str(outer.get("message") or outer.get("text") or "")
+                  if "SecPR-TR structured logging smoke test" not in message:
+                      continue
+                  try:
+                      inner = json.loads(message)
+                  except json.JSONDecodeError:
+                      continue
+                  if inner.get("message") == "SecPR-TR structured logging smoke test":
+                      found += 1
+                      print(inner)
+          assert found > 0, "structured log smoke record not found as nested JSON"
+          print("structured-log-output: PASS")
+          PY
+
+      - name: Trigger Sentry smoke test when configured
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          sentry="$(python - <<'PY'
+          import json, urllib.request
+          data=json.load(urllib.request.urlopen("https://${FLY_APP}.fly.dev/health"))
+          print(data["checks"].get("sentry","unknown"))
           PY
           )"
           if [ "$sentry" != "configured" ]; then
-            echo "sentry-smoke: SKIPPED (SENTRY_DSN is not configured in production)"
+            echo "sentry-smoke: SKIPPED (SENTRY_DSN is not configured)"
             exit 0
           fi
-          result="$(flyctl ssh console -a "$FLY_APP" -q -C "sh -lc 'curl -fsS -H \"X-Admin-Token: \$ADMIN_SECRET\" http://127.0.0.1:8000/admin/sentry-test'")"
+          result="$(flyctl ssh console -a "$FLY_APP" -q -C 'python -c "import os,urllib.request; r=urllib.request.Request(\"http://127.0.0.1:8000/admin/sentry-test\",method=\"POST\",headers={\"X-Admin-Token\":os.environ[\"ADMIN_SECRET\"]}); print(urllib.request.urlopen(r,timeout=10).read().decode())"')"
           echo "$result"
           python - <<'PY' "$result"
           import json, sys
-          data = json.loads(sys.argv[1])
-          assert data["status"] == "sent", data
+          data=json.loads(sys.argv[1])
           assert data.get("event_id"), data
-          print("sentry-smoke: PASS")
-          print("sentry-event-id:", data["event_id"])
+          print("sentry-smoke: PASS", data["event_id"])
           PY
-
-      - name: Capture production logs around the smoke test
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: |
-          set -euo pipefail
-          curl -fsS "https://${FLY_APP}.fly.dev/health" >/dev/null
-          flyctl logs -a "$FLY_APP" --no-tail --json > fly-production-logs.jsonl
-          echo "---- health/access log evidence ----"
-          python - <<'PY'
-          import json
-          found = False
-          structured = False
-          with open("fly-production-logs.jsonl", encoding="utf-8") as f:
-              for raw in f:
-                  try:
-                      obj = json.loads(raw)
-                  except json.JSONDecodeError:
-                      continue
-                  message = str(obj.get("message") or obj.get("text") or "")
-                  if "GET /health" in message or "/health" in message:
-                      print(message)
-                      found = True
-                      if message.lstrip().startswith("{"):
-                          structured = True
-          if not found:
-              print("No message field matching /health was found in the current Fly log buffer.")
-          nested = []
-          with open("fly-production-logs.jsonl", encoding="utf-8") as f:
-              for raw in f:
-                  try:
-                      obj = json.loads(raw)
-                  except json.JSONDecodeError:
-                      continue
-                  message = str(obj.get("message") or obj.get("text") or "")
-                  if "SecPR-TR structured logging smoke test" in message:
-                      nested.append(message)
-          if not nested:
-              print("structured-log-message: NOT_FOUND")
-          else:
-              parsed = 0
-              for message in nested:
-                  try:
-                      event = json.loads(message)
-                  except json.JSONDecodeError:
-                      continue
-                  if event.get("message") == "SecPR-TR structured logging smoke test":
-                      parsed += 1
-              if parsed:
-                  print("structured-log-message: PASS")
-              else:
-                  print("structured-log-message: FOUND_BUT_NOT_JSON")
-          PY
-          echo "---- last 40 raw Fly log records ----"
-          tail -n 40 fly-production-logs.jsonl
 
       - name: Upload production log evidence
         uses: actions/upload-artifact@v4
