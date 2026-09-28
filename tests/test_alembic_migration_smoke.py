@@ -15,13 +15,13 @@ def test_alembic_upgrade_creates_baseline_schema(tmp_path, monkeypatch):
 
     from app import db as db_module
 
+    engine = create_engine(database_url, future=True)
+
     usage_columns = {column["name"] for column in inspect(engine).get_columns("usage_logs")}
     assert {"input_tokens", "output_tokens", "gemini_cost_usd", "llm_calls", "llm_cache_hits"}.issubset(usage_columns)
 
     db_module._reset_for_tests(engine=None, session_factory=None)
     assert db_module.init_db() is True
-
-    engine = create_engine(database_url, future=True)
     tables = set(inspect(engine).get_table_names())
     expected = {"alembic_version", "installations", "usage_logs", "findings", "settings"}
     assert expected.issubset(tables)
