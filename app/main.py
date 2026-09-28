@@ -35,6 +35,7 @@ from app.semgrep_scanner import scan_diff, SemgrepNotAvailable, validate_configs
 from app.diff_utils import parse_added_lines
 from app.db import init_db
 from app.web import router as web_router
+from app.cost_control import LLMUsageCollector, llm_response_cache
 from app.repository import (
     upsert_installation,
     ensure_installation,
@@ -45,6 +46,7 @@ from app.repository import (
     get_stats_summary,
     get_installation_settings,
     set_installation_settings,
+    get_detailed_metrics,
 )
 import json
 import hmac
@@ -479,6 +481,7 @@ async def _run_pr_review(
         review_types = ["short_summary", "security"]
 
     started_at = time.monotonic()
+    llm_usage = LLMUsageCollector()
 
     # installation.created event'i kaçırılmış olabilir (App bu DB devreye
     # girmeden önce kurulduysa GitHub o event'i bir daha göndermez) —
@@ -541,7 +544,7 @@ async def _run_pr_review(
         if "short_summary" not in review_types:
             return None
         logger.info("📊 LLM özet analizi (Semgrep'le paralel)...")
-        return analyze_diff_stage1(diff_to_analyze)
+        return analyze_diff_stage1(diff_to_analyze, usage=llm_usage)
 
     with ThreadPoolExecutor(max_workers=2) as ex:
         f_semgrep = ex.submit(_semgrep_task)
@@ -558,6 +561,7 @@ async def _run_pr_review(
         review_types=review_types,
         security_scan=security_scan,
         precomputed_summary=stage1_result,
+        usage=llm_usage,
     )
     t_gemini_ms = int((time.monotonic() - t_gemini_start) * 1000)
     ParseStatistics.record_attempt(result["status"] == "success")
@@ -643,6 +647,14 @@ async def _run_pr_review(
             finding_count=finding_count,
             parse_success=(result["status"] == "success"),
             duration_ms=duration_ms,
+            t_github_ms=t_github_ms,
+            t_semgrep_ms=t_semgrep_ms,
+            t_gemini_ms=t_gemini_ms,
+            input_tokens=llm_usage.snapshot()["input_tokens"],
+            output_tokens=llm_usage.snapshot()["output_tokens"],
+            gemini_cost_usd=llm_usage.snapshot()["cost_usd"],
+            llm_calls=llm_usage.snapshot()["calls"],
+            llm_cache_hits=llm_usage.snapshot()["cache_hits"],
         )
         if security_scan and security_scan.get("status") == "ok":
             record_findings(
@@ -668,6 +680,20 @@ async def _run_pr_review(
             "semgrep_and_summary": t_semgrep_ms,
             "gemini_detail": t_gemini_ms,
         },
+    }
+
+
+# -------------------------------------------------------------------
+# Endpoint: operasyonel / maliyet metrikleri
+# -------------------------------------------------------------------
+
+@app.get("/metrics")
+async def metrics():
+    usage = get_detailed_metrics()
+    return {
+        "parser_success_rate_pct": round(ParseStatistics.get_success_rate(), 1),
+        "llm_cache": llm_response_cache.stats() if "llm_response_cache" in globals() else None,
+        "usage": usage,
     }
 
 
