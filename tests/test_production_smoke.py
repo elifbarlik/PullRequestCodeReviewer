@@ -62,3 +62,11 @@ def test_webhook_requires_valid_signature(smoke_client):
         },
     )
     assert response.status_code == 403
+
+
+def test_metrics_endpoint(smoke_client):
+    response = smoke_client.get("/metrics")
+    assert response.status_code == 200
+    body = response.json()
+    assert "parser_success_rate_pct" in body
+    assert "usage" in body
