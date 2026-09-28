@@ -54,6 +54,9 @@ import secrets as _secrets
 import time
 from dotenv import load_dotenv
 import logging
+import shutil
+
+from sqlalchemy import text
 
 load_dotenv()
 
@@ -61,22 +64,31 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+APP_VERSION = "0.5.0"
+# Startup migration state is intentionally kept separate from the live
+# database connectivity check exposed by /health.
+_startup_db_status = "not_started"
+
 @asynccontextmanager
 async def _lifespan(_app: "FastAPI"):
     """
-    Uygulama açılışında DB tablolarını hazırla. DATABASE_URL yoksa
-    init_db() sessizce False döner — uygulama DB'siz çalışmaya devam eder
-    (bkz. app/db.py tasarım notu).
+    Uygulama açılışında Alembic migration'larını uygula.
+
+    DATABASE_URL yoksa DB intentionally disabled kalır. DATABASE_URL
+    tanımlı olup migration başarısız olursa servis yine import edilebilir;
+    /health bu durumu açıkça raporlar.
     """
+    global _startup_db_status
     try:
-        init_db()
+        migrated = init_db()
+        _startup_db_status = "ok" if migrated else "disabled"
     except Exception as e:
-        # DB kurulumu patlasa bile servis ayağa kalkmalı — veri katmanı opsiyonel.
-        logger.error(f"⚠️  init_db başarısız (DB'siz devam ediliyor): {e}")
+        _startup_db_status = "error"
+        logger.error(f"⚠️  Alembic startup migration başarısız: {e}")
     yield
 
 
-app = FastAPI(title="SecPR-TR", version="0.5.0", lifespan=_lifespan)
+app = FastAPI(title="SecPR-TR", version=APP_VERSION, lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(web_router)
 
@@ -161,10 +173,62 @@ class InstallationSettingsRequest(BaseModel):
 # Endpoint: sağlık kontrolü
 # -------------------------------------------------------------------
 
+def _database_health_status() -> str:
+    """Return a safe database health state without exposing connection details."""
+    from app.db import db_enabled, get_engine
+
+    if not db_enabled():
+        return "disabled"
+    if _startup_db_status == "error":
+        return "error"
+
+    try:
+        engine = get_engine()
+        if engine is None:
+            return "error"
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        return "ok"
+    except Exception:
+        logger.exception("❌ /health database connectivity check failed")
+        return "error"
+
+
+def _configured(value: str) -> str:
+    return "configured" if bool(os.getenv(value, "").strip()) else "missing"
+
+
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    return {"status": "ok", "version": "0.3.0", "app": "SecPR-TR"}
+    """Production health/status endpoint without revealing secret values."""
+    database_status = _database_health_status()
+    semgrep_status = "ok" if shutil.which("semgrep") else "unavailable"
+    checks = {
+        "database": database_status,
+        "semgrep": semgrep_status,
+        "github": (
+            "configured"
+            if os.getenv("GITHUB_APP_ID", "").strip()
+            and (os.getenv("GITHUB_APP_PRIVATE_KEY", "").strip()
+                 or os.getenv("GITHUB_APP_PRIVATE_KEY_PATH", "").strip())
+            else "missing"
+        ),
+        "gemini": _configured("GEMINI_API_KEY"),
+        "webhook": _configured("GITHUB_WEBHOOK_SECRET"),
+    }
+    ready = (
+        database_status in {"ok", "disabled"}
+        and semgrep_status == "ok"
+        and checks["github"] == "configured"
+        and checks["gemini"] == "configured"
+        and checks["webhook"] == "configured"
+    )
+    return {
+        "status": "ok" if ready else "degraded",
+        "version": APP_VERSION,
+        "app": "SecPR-TR",
+        "checks": checks,
+    }
 
 
 # -------------------------------------------------------------------
