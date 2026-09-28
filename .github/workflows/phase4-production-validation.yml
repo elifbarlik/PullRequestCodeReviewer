@@ -39,6 +39,20 @@ jobs:
           test "$log_format" = "json"
           echo "production LOG_FORMAT: PASS"
 
+      - name: Emit authenticated structured logging smoke test
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          result="$(flyctl ssh console -a "$FLY_APP" -q -C "sh -lc 'curl -fsS -X POST -H \"X-Admin-Token: \$ADMIN_SECRET\" http://127.0.0.1:8000/admin/logging-test'")"
+          echo "$result"
+          python - <<'PY' "$result"
+          import json, sys
+          data = json.loads(sys.argv[1])
+          assert data["status"] == "logged", data
+          print("structured-log-smoke endpoint: PASS")
+          PY
+
       - name: Trigger authenticated Sentry production smoke test when configured
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -91,11 +105,31 @@ jobs:
                           structured = True
           if not found:
               print("No message field matching /health was found in the current Fly log buffer.")
-          if structured:
-              print("structured-log-message: PASS")
+          nested = []
+          with open("fly-production-logs.jsonl", encoding="utf-8") as f:
+              for raw in f:
+                  try:
+                      obj = json.loads(raw)
+                  except json.JSONDecodeError:
+                      continue
+                  message = str(obj.get("message") or obj.get("text") or "")
+                  if "SecPR-TR structured logging smoke test" in message:
+                      nested.append(message)
+          if not nested:
+              print("structured-log-message: NOT_FOUND")
           else:
-              print("WARNING: no structured application log message detected in the current Fly log buffer")
-          print("structured_message_count:", int(structured))
+              parsed = 0
+              for message in nested:
+                  try:
+                      event = json.loads(message)
+                  except json.JSONDecodeError:
+                      continue
+                  if event.get("message") == "SecPR-TR structured logging smoke test":
+                      parsed += 1
+              if parsed:
+                  print("structured-log-message: PASS")
+              else:
+                  print("structured-log-message: FOUND_BUT_NOT_JSON")
           PY
           echo "---- last 40 raw Fly log records ----"
           tail -n 40 fly-production-logs.jsonl
