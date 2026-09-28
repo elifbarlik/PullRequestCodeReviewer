@@ -221,6 +221,24 @@ class TestStatsSummary:
         assert summary["reviews_last_7d"] == 2
 
 
+class TestRateLimit:
+    def test_installation_hourly_rate_limit(self, db_session):
+        repository.upsert_installation(777, "acme", "Organization", "all")
+        for number in range(2):
+            repository.record_usage(
+                installation_id=777,
+                owner="acme",
+                repo="web",
+                pr_number=number + 1,
+            )
+
+        assert repository.check_rate_limit(777, limit_per_hour=2) is False
+        assert repository.check_rate_limit(777, limit_per_hour=3) is True
+
+    def test_rate_limit_is_fail_open_when_db_disabled(self, db_disabled):
+        assert repository.check_rate_limit(777, limit_per_hour=1) is True
+
+
 # =====================================================================
 # DB KAPALI — her şey sessizce no-op
 # =====================================================================
