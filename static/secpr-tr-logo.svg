@@ -1,8 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200" role="img" aria-labelledby="title desc">
-  <title id="title">SecPR-TR</title>
-  <desc id="desc">SecPR-TR security review logo</desc>
+  <title id="title">SecPR-TR icon</title>
+  <desc id="desc">Shield and check icon for SecPR-TR</desc>
   <rect width="200" height="200" rx="36" fill="#080b10"/>
   <path d="M100 24 156 46v48c0 38-23 64-56 82-33-18-56-44-56-82V46l56-22Z" fill="#10151d" stroke="#8df0c0" stroke-width="6"/>
   <path d="m68 98 20 20 45-47" fill="none" stroke="#8df0c0" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="100" y="166" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#edf2f7">SecPR-TR</text>
 </svg>
