@@ -2,7 +2,7 @@ name: Tests
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: [ main, master, develop, feat/sprint-4-launch-hardening ]
   pull_request:
     branches: [ main, master, develop ]
 
@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Set up Python 3.11
       uses: actions/setup-python@v4
@@ -34,7 +34,7 @@ jobs:
     # sadece "hâlâ çalışıyor mu + recall eşiğin üstünde mi" kontrolü.
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Set up Python 3.11
       uses: actions/setup-python@v4
@@ -67,3 +67,61 @@ jobs:
         assert agg["clean_false_positives"] <= 1, f"temiz PR false positive arttı: {agg['clean_false_positives']}"
         assert not agg["errors"], f"hata veren senaryolar: {agg['errors']}"
         EOF
+
+  docker_smoke:
+    name: Production Docker smoke
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Build production image
+      run: docker build --tag secpr-tr:phase1 .
+
+    - name: Start smoke container
+      run: |
+        docker run --detach --name secpr-tr-smoke           --publish 18000:8000           --env DATABASE_URL=sqlite:////tmp/secpr-smoke.db           --env GITHUB_APP_ID=smoke-test           --env GITHUB_APP_PRIVATE_KEY=smoke-test-key           --env GITHUB_WEBHOOK_SECRET=smoke-webhook-secret           --env GEMINI_API_KEY=smoke-gemini-key           --env PORT=8000           secpr-tr:phase1
+
+    - name: Wait for application
+      run: |
+        for i in {1..30}; do
+          if curl --fail --silent http://127.0.0.1:18000/health > /tmp/health.json; then
+            cat /tmp/health.json
+            break
+          fi
+          sleep 2
+        done
+        test -s /tmp/health.json
+
+    - name: Verify production routes
+      run: |
+        curl --fail --silent http://127.0.0.1:18000/health
+        curl --fail --silent http://127.0.0.1:18000/
+        curl --fail --silent http://127.0.0.1:18000/dashboard
+        curl --fail --silent http://127.0.0.1:18000/docs
+        test "$(curl --silent --output /dev/null --write-out '%{http_code}'           -X POST http://127.0.0.1:18000/webhook           -H 'X-Hub-Signature-256: sha256=invalid'           -H 'Content-Type: application/json'           --data '{}')" = "403"
+
+    - name: Verify packaged runtime files
+      run: |
+        docker exec secpr-tr-smoke test -f /app/static/index.html
+        docker exec secpr-tr-smoke test -f /app/static/dashboard.html
+        docker exec secpr-tr-smoke test -f /app/alembic.ini
+        docker exec secpr-tr-smoke test -f /app/alembic/versions/0001_baseline_schema.py
+
+    - name: Verify Alembic migration
+      run: |
+        docker exec secpr-tr-smoke python - <<'PY'
+        from sqlalchemy import create_engine, inspect, text
+        engine = create_engine("sqlite:////tmp/secpr-smoke.db")
+        tables = set(inspect(engine).get_table_names())
+        required = {"alembic_version", "installations", "usage_logs", "findings", "settings"}
+        missing = required - tables
+        assert not missing, f"Missing migrated tables: {sorted(missing)}"
+        with engine.connect() as conn:
+            revision = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        assert revision == "0001_baseline_schema", revision
+        print("Alembic migration verified:", revision)
+        PY
+
+    - name: Cleanup smoke container
+      if: always()
+      run: docker rm --force secpr-tr-smoke

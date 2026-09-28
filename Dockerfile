@@ -30,6 +30,14 @@ RUN mkdir -p /tmp/warm && echo "x = 1" > /tmp/warm/warm.py && \
 
 COPY app/ ./app/
 COPY static/ ./static/
+COPY alembic.ini ./
+COPY alembic/ ./alembic/
+
+# Fail the image build if required runtime assets/migrations are missing.
+RUN test -f /app/static/index.html \
+    && test -f /app/static/dashboard.html \
+    && test -f /app/alembic.ini \
+    && test -f /app/alembic/versions/0001_baseline_schema.py
 
 EXPOSE 8000
 
