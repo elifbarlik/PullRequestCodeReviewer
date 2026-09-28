@@ -48,6 +48,8 @@ class Installation(Base):
     )
 
     usage_logs: Mapped[list["UsageLog"]] = relationship(back_populates="installation")
+    repositories: Mapped[list["Repository"]] = relationship(back_populates="installation")
+    review_runs: Mapped[list["ReviewRun"]] = relationship(back_populates="installation")
 
 
 class UsageLog(Base):
@@ -116,3 +118,51 @@ class Settings(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
+
+class Repository(Base):
+    """GitHub repository tracked by an App installation."""
+    __tablename__ = "repositories"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    installation_id: Mapped[int] = mapped_column(ForeignKey("installations.id"), index=True, nullable=False)
+    owner: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    full_name: Mapped[str] = mapped_column(String(511), nullable=False, unique=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+    installation: Mapped["Installation"] = relationship(back_populates="repositories")
+    review_runs: Mapped[list["ReviewRun"]] = relationship(back_populates="repository")
+
+
+class ReviewRun(Base):
+    """Persistent lifecycle record for one PR review attempt."""
+    __tablename__ = "review_runs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    installation_id: Mapped[int] = mapped_column(ForeignKey("installations.id"), index=True, nullable=False)
+    repository_id: Mapped[int] = mapped_column(ForeignKey("repositories.id"), index=True, nullable=False)
+    pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    head_sha: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    files_scanned: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    findings_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    installation: Mapped["Installation"] = relationship(back_populates="review_runs")
+    repository: Mapped["Repository"] = relationship(back_populates="review_runs")
+
+
+class WebhookDelivery(Base):
+    """Durable webhook idempotency record."""
+    __tablename__ = "webhook_deliveries"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    delivery_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    installation_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    repository_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="received")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

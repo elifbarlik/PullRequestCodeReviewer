@@ -20,7 +20,7 @@ def test_alembic_upgrade_creates_baseline_schema(tmp_path, monkeypatch):
     assert db_module.init_db() is True
 
     tables = set(inspect(engine).get_table_names())
-    expected = {"alembic_version", "installations", "usage_logs", "findings", "settings"}
+    expected = {"alembic_version", "installations", "usage_logs", "findings", "settings", "repositories", "review_runs", "webhook_deliveries"}
     assert expected.issubset(tables)
 
     usage_columns = {
@@ -42,5 +42,5 @@ def test_alembic_upgrade_creates_baseline_schema(tmp_path, monkeypatch):
             text("SELECT version_num FROM alembic_version")
         ).scalar_one()
 
-    assert revision == "0002_review_cost_metrics"
+    assert revision == "0003_review_lifecycle"
     db_module._reset_for_tests(engine=None, session_factory=None)
