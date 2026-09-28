@@ -72,19 +72,27 @@ except ImportError:  # pragma: no cover - dependency is installed in production
 
 try:
     from pythonjsonlogger.json import JsonFormatter
-except ImportError:  # compatibility with older python-json-logger releases
-    from pythonjsonlogger.jsonlogger import JsonFormatter
+except ImportError:
+    try:
+        from pythonjsonlogger.jsonlogger import JsonFormatter
+    except ImportError:  # optional locally; production image installs it
+        JsonFormatter = None
 
 load_dotenv()
 
 def _configure_logging() -> None:
     log_format = os.getenv("LOG_FORMAT", "text").strip().lower()
-    if log_format == "json":
+    if log_format == "json" and JsonFormatter is not None:
         handler = logging.StreamHandler()
         handler.setFormatter(
             JsonFormatter("%(asctime)s %(name)s %(levelname)s %(message)s")
         )
         logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
+    elif log_format == "json":
+        logging.basicConfig(level=logging.INFO)
+        logging.getLogger(__name__).warning(
+            "LOG_FORMAT=json requested but python-json-logger is not installed; using text logs"
+        )
     else:
         logging.basicConfig(level=logging.INFO)
 
