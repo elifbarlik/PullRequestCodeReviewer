@@ -155,6 +155,14 @@ def record_usage(
     finding_count: int = 0,
     parse_success: Optional[bool] = None,
     duration_ms: Optional[int] = None,
+    t_github_ms: Optional[int] = None,
+    t_semgrep_ms: Optional[int] = None,
+    t_gemini_ms: Optional[int] = None,
+    input_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None,
+    gemini_cost_usd: Optional[float] = None,
+    llm_calls: Optional[int] = None,
+    llm_cache_hits: Optional[int] = None,
 ) -> Optional[int]:
     """
     Bir PR analizini usage_logs'a yazar.
