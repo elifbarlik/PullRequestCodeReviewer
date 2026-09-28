@@ -868,7 +868,7 @@ async def _process_pr_event_bg(
             action, payload, review_run_id=review_run_id
         )
         security = result.get("analyses", {}).get("security", {}) if isinstance(result, dict) else {}
-        files_scanned = len(payload.get("pull_request", {}).get("changed_files") or [])
+        files_scanned = int(payload.get("pull_request", {}).get("changed_files") or 0)
         findings_count = len(security.get("vulnerabilities", [])) if isinstance(security, dict) else 0
         update_review_run(
             review_run_id,
@@ -1073,8 +1073,28 @@ async def _handle_installation_repositories_event(action: str, payload: dict) ->
     removed → kullanıcı repodan erişimi kaldırdı
     """
     installation_id = payload.get("installation", {}).get("id")
-    repos_added = [r["full_name"] for r in payload.get("repositories_added", [])]
-    repos_removed = [r["full_name"] for r in payload.get("repositories_removed", [])]
+    added_payload = payload.get("repositories_added", [])
+    removed_payload = payload.get("repositories_removed", [])
+    repos_added = [r.get("full_name") for r in added_payload if r.get("full_name")]
+    repos_removed = [r.get("full_name") for r in removed_payload if r.get("full_name")]
+
+    for item in added_payload:
+        if item.get("id") and item.get("full_name"):
+            full_name = item["full_name"]
+            owner_name, repo_name = full_name.split("/", 1)
+            upsert_repository(
+                installation_id=installation_id,
+                github_repository_id=item["id"],
+                owner=owner_name,
+                name=repo_name,
+                full_name=full_name,
+                active=True,
+            )
+
+    for item in removed_payload:
+        if item.get("id"):
+            from app.repository import deactivate_repository
+            deactivate_repository(installation_id, item["id"])
 
     if repos_added:
         logger.info(f"➕ Repo eklendi — installation={installation_id}: {repos_added}")
