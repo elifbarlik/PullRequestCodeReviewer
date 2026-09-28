@@ -228,7 +228,7 @@ class LLMUsageCollector:
                 "input_tokens": self.input_tokens,
                 "output_tokens": self.output_tokens,
                 "total_tokens": self.input_tokens + self.output_tokens,
-                "cost_usd": round(self.cost_usd, 8),
+                "cost_usd": None if self.pricing_unknown_calls else round(self.cost_usd, 8),
                 "calls": self.calls,
                 "cache_hits": self.cache_hits,
                 "pricing_unknown_calls": self.pricing_unknown_calls,
