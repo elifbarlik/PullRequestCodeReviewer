@@ -249,6 +249,143 @@ def record_findings(
         logger.error(f"⚠️  record_findings başarısız (yutuldu): {e}")
 
 
+
+# -------------------------------------------------------------------
+# Repository / review lifecycle / webhook idempotency
+# -------------------------------------------------------------------
+
+def upsert_repository(installation_id: int, github_repository_id: int, owner: str, name: str, full_name: str, active: bool = True) -> Optional[int]:
+    if not db_enabled():
+        return None
+    try:
+        from app.models import Repository
+        with get_session() as session:
+            row = session.get(Repository, github_repository_id)
+            if row is None:
+                row = Repository(id=github_repository_id, installation_id=installation_id, owner=owner, name=name, full_name=full_name, active=active)
+                session.add(row)
+            else:
+                row.installation_id = installation_id
+                row.owner = owner
+                row.name = name
+                row.full_name = full_name
+                row.active = active
+            session.flush()
+            return row.id
+    except Exception as e:
+        logger.error(f"⚠️ upsert_repository başarısız (yutuldu): {e}")
+        return None
+
+
+def deactivate_repository(installation_id: int, github_repository_id: int) -> None:
+    if not db_enabled():
+        return
+    try:
+        from app.models import Repository
+        with get_session() as session:
+            row = session.get(Repository, github_repository_id)
+            if row is not None and row.installation_id == installation_id:
+                row.active = False
+    except Exception as e:
+        logger.error(f"⚠️ deactivate_repository başarısız (yutuldu): {e}")
+
+
+def create_review_run(installation_id: int, repository_id: int, pr_number: int, head_sha: str) -> Optional[int]:
+    if not db_enabled():
+        return None
+    try:
+        from app.models import ReviewRun
+        with get_session() as session:
+            row = ReviewRun(installation_id=installation_id, repository_id=repository_id, pr_number=pr_number, head_sha=head_sha, status="queued")
+            session.add(row)
+            session.flush()
+            return row.id
+    except Exception as e:
+        logger.error(f"⚠️ create_review_run başarısız (yutuldu): {e}")
+        return None
+
+
+def update_review_run(review_run_id: Optional[int], status: str, *, files_scanned: Optional[int] = None, findings_count: Optional[int] = None, error: Optional[str] = None) -> None:
+    if not db_enabled() or review_run_id is None:
+        return
+    try:
+        from datetime import datetime, timezone
+        from app.models import ReviewRun
+        with get_session() as session:
+            row = session.get(ReviewRun, review_run_id)
+            if row is None:
+                return
+            row.status = status
+            if status == "running" and row.started_at is None:
+                row.started_at = datetime.now(timezone.utc)
+            if status in {"completed", "failed"}:
+                row.completed_at = datetime.now(timezone.utc)
+            if files_scanned is not None:
+                row.files_scanned = files_scanned
+            if findings_count is not None:
+                row.findings_count = findings_count
+            row.error = error[:4000] if error else None
+    except Exception as e:
+        logger.error(f"⚠️ update_review_run başarısız (yutuldu): {e}")
+
+
+def claim_webhook_delivery(delivery_id: str, event_type: str, action: Optional[str], installation_id: Optional[int], repository_id: Optional[int]) -> Optional[bool]:
+    if not db_enabled() or not delivery_id:
+        return None
+    try:
+        from sqlalchemy.exc import IntegrityError
+        from app.models import WebhookDelivery
+        with get_session() as session:
+            row = WebhookDelivery(delivery_id=delivery_id, event_type=event_type or "unknown", action=action, installation_id=installation_id, repository_id=repository_id, status="received")
+            session.add(row)
+            try:
+                session.flush()
+                return False
+            except IntegrityError:
+                session.rollback()
+                return True
+    except Exception as e:
+        logger.error(f"⚠️ claim_webhook_delivery başarısız (memory fallback): {e}")
+        return None
+
+
+def mark_webhook_delivery(delivery_id: str, status: str, error: Optional[str] = None) -> None:
+    if not db_enabled() or not delivery_id:
+        return
+    try:
+        from datetime import datetime, timezone
+        from sqlalchemy import select
+        from app.models import WebhookDelivery
+        with get_session() as session:
+            row = session.scalar(select(WebhookDelivery).where(WebhookDelivery.delivery_id == delivery_id))
+            if row is not None:
+                row.status = status
+                row.error = error[:4000] if error else None
+                row.processed_at = datetime.now(timezone.utc)
+    except Exception as e:
+        logger.error(f"⚠️ mark_webhook_delivery başarısız (yutuldu): {e}")
+
+
+def recover_stale_review_runs(max_age_minutes: int = 30) -> int:
+    if not db_enabled():
+        return 0
+    try:
+        from datetime import datetime, timedelta, timezone
+        from sqlalchemy import select
+        from app.models import ReviewRun
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+        with get_session() as session:
+            rows = session.scalars(select(ReviewRun).where(ReviewRun.status.in_(("queued", "running")), ReviewRun.created_at < cutoff)).all()
+            for row in rows:
+                row.status = "failed"
+                row.completed_at = datetime.now(timezone.utc)
+                row.error = "Recovered after process restart: stale review run."
+            return len(rows)
+    except Exception as e:
+        logger.error(f"⚠️ recover_stale_review_runs başarısız: {e}")
+        return 0
+
+
 # -------------------------------------------------------------------
 # Installation ayarları (Faz 2c — repo/installation bazlı Semgrep config)
 # -------------------------------------------------------------------
