@@ -7,6 +7,10 @@ app = 'pr-reviewer-quiet-fire-1218'
 primary_region = 'fra'
 
 [build]
+[env]
+  LOG_FORMAT = "json"
+  HOURLY_PR_LIMIT = "50"
+
 [http_service]
   internal_port = 8000
   force_https = true

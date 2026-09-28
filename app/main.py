@@ -104,6 +104,7 @@ APP_VERSION = "0.5.0"
 HOURLY_PR_LIMIT = max(1, int(os.getenv("HOURLY_PR_LIMIT", "50")))
 
 _SENTRY_DSN = os.getenv("SENTRY_DSN", "").strip()
+_SENTRY_ENABLED = bool(_SENTRY_DSN and sentry_sdk is not None)
 if _SENTRY_DSN and sentry_sdk is not None:
     sentry_sdk.init(
         dsn=_SENTRY_DSN,
@@ -266,6 +267,7 @@ async def health_check():
         ),
         "gemini": _configured("GEMINI_API_KEY"),
         "webhook": _configured("GITHUB_WEBHOOK_SECRET"),
+        "sentry": "configured" if _SENTRY_ENABLED else "not_configured",
     }
     ready = (
         database_status in {"ok", "disabled"}
@@ -324,6 +326,32 @@ def _verify_admin_token(request: Request) -> None:
     token = request.headers.get("X-Admin-Token", "")
     if not _secrets.compare_digest(admin_secret, token):
         raise HTTPException(status_code=401, detail="Geçersiz admin token")
+
+
+@app.post("/admin/sentry-test")
+async def admin_sentry_test(request: Request):
+    """Send one explicit, authenticated Sentry smoke-test event."""
+    _verify_admin_token(request)
+
+    if sentry_sdk is None:
+        raise HTTPException(status_code=503, detail="sentry-sdk kurulu değil")
+    if not _SENTRY_DSN:
+        raise HTTPException(status_code=503, detail="SENTRY_DSN yapılandırılmamış")
+
+    with sentry_sdk.push_scope() as scope:
+        scope.set_tag("secpr_smoke_test", "true")
+        scope.set_tag("app_version", APP_VERSION)
+        event_id = sentry_sdk.capture_message(
+            "SecPR-TR Sentry production smoke test",
+            level="warning",
+        )
+    sentry_sdk.flush(timeout=2.0)
+
+    return {
+        "status": "sent",
+        "event_id": event_id,
+        "release": f"secpr-tr@{APP_VERSION}",
+    }
 
 
 # -------------------------------------------------------------------
