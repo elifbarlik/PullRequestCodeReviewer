@@ -151,3 +151,29 @@ class TestValidateConfigs:
         assert validate_configs(["/etc/passwd", "https://evil.test/rules.yml"]) == list(
             DEFAULT_SEMGREP_CONFIGS
         )
+
+
+def test_large_pr_uses_large_timeout(monkeypatch):
+    seen = {}
+
+    monkeypatch.setattr(semgrep_scanner, "_semgrep_binary", lambda: "semgrep")
+
+    def fake_run(cmd, capture_output, text, timeout):
+        seen["timeout"] = timeout
+        return type("Completed", (), {"returncode": 0, "stdout": '{"results": []}', "stderr": ""})()
+
+    monkeypatch.setattr(semgrep_scanner.subprocess, "run", fake_run)
+
+    files = {f"src/file_{i}.py": "x = 1\n" for i in range(13)}
+    results = run_semgrep(files, configs=["p/default"])
+    assert results == []
+    assert seen["timeout"] == semgrep_scanner.SEMGREP_TIMEOUT_LARGE
+
+
+def test_large_diff_is_truncated_to_budget():
+    from app.reviewer import truncate_diff, TokenManager
+
+    diff = "\n".join(f"+line_{i}" for i in range(10000))
+    truncated = truncate_diff(diff)
+    assert len(truncated) <= TokenManager.get_max_diff_length()
+    assert "Diff truncated" in truncated or len(truncated) < len(diff)
