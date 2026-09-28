@@ -1,7 +1,6 @@
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.orm import sessionmaker
 
 from app.db import _reset_for_tests
 from app.models import Base, Installation, Repository, ReviewRun, WebhookDelivery
@@ -20,6 +19,8 @@ def db():
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, future=True)
     _reset_for_tests(engine=engine, session_factory=Session)
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
     with Session() as session:
         session.add(
             Installation(
@@ -32,6 +33,7 @@ def db():
         session.commit()
     yield engine
     _reset_for_tests()
+    monkeypatch.undo()
 
 
 def test_webhook_delivery_is_durable_and_idempotent(db):
