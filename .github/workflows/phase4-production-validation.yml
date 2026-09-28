@@ -1,0 +1,63 @@
+name: Phase 4 Production Validation
+
+on:
+  push:
+    branches:
+      - ops/phase4-production-validation
+
+jobs:
+  production-validation:
+    runs-on: ubuntu-latest
+    env:
+      FLY_APP: pr-reviewer-quiet-fire-1218
+    steps:
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Verify production health and Sentry configuration
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          health="$(curl -fsS "https://${FLY_APP}.fly.dev/health")"
+          echo "$health"
+          python - <<'PY' "$health"
+          import json, sys
+          data = json.loads(sys.argv[1])
+          assert data["status"] == "ok", data
+          assert data["checks"]["sentry"] == "configured", data
+          print("health/sentry-config: PASS")
+          PY
+
+      - name: Trigger authenticated Sentry production smoke test
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          result="$(flyctl ssh console -a "$FLY_APP" -q -C "sh -lc 'curl -fsS -H \"X-Admin-Token: \$ADMIN_SECRET\" http://127.0.0.1:8000/admin/sentry-test'")"
+          echo "$result"
+          python - <<'PY' "$result"
+          import json, sys
+          data = json.loads(sys.argv[1])
+          assert data["status"] == "sent", data
+          assert data.get("event_id"), data
+          print("sentry-smoke: PASS")
+          print("sentry-event-id:", data["event_id"])
+          PY
+
+      - name: Capture production logs around the smoke test
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          flyctl logs -a "$FLY_APP" --no-tail > fly-production-logs.txt
+          echo "---- relevant log lines ----"
+          grep -n -E "sentry-test|Sentry|admin/sentry" fly-production-logs.txt || true
+          echo "---- last 80 log lines ----"
+          tail -n 80 fly-production-logs.txt
+
+      - name: Upload production log evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase4-production-logs
+          path: fly-production-logs.txt
+          if-no-files-found: error
