@@ -240,17 +240,37 @@ class GitHubAppClient:
 
     def get_pr_files(self, owner: str, repo: str, pr_number: int) -> list:
         """
-        PR'daki değişen dosyaların listesini döndürür.
+        PR'daki değişen dosyaların TAM listesini döndürür.
 
-        Returns:
-            Her dosya için: filename, status, additions, deletions, patch vb.
+        GitHub PR files endpoint'i sayfalıdır. Faz 7'de tüm sayfalar
+        response.links içindeki next bağlantısı üzerinden takip edilir;
+        böylece 100'den fazla dosya değiştiren PR'larda ilk sayfaya
+        sessizce düşülmez.
         """
         url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls/{pr_number}/files"
-        response = requests.get(
-            url, headers=self._auth_headers(), params={"per_page": 100}, timeout=10
-        )
-        response.raise_for_status()
-        return response.json()
+        params: Optional[Dict[str, int]] = {"per_page": 100}
+        files = []
+
+        while url:
+            response = requests.get(
+                url,
+                headers=self._auth_headers(),
+                params=params,
+                timeout=10,
+            )
+            response.raise_for_status()
+
+            page = response.json()
+            if not isinstance(page, list):
+                raise ValueError("GitHub PR files API beklenmeyen bir yanıt döndürdü")
+
+            files.extend(page)
+
+            # requests, GitHub Link header'ını response.links olarak parse eder.
+            url = response.links.get("next", {}).get("url")
+            params = None
+
+        return files
 
     def get_pr_bundle(self, owner: str, repo: str, pr_number: int) -> Dict[str, Any]:
         """
