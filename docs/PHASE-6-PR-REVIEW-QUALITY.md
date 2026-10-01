@@ -27,7 +27,7 @@ Silinen dosyalar da tarama kapsamı dışındadır.
 
 - Maksimum taranabilir dosya: `60`
 - Maksimum güvenlik taraması diff boyutu: `512 KiB`
-- Semgrep'teki tek dosya hedef boyutu sınırı: `1 MB`
+- Tek dosya Semgrep hedef boyutu sınırı: `1 MB`
 - Mevcut Semgrep timeout davranışı korunur.
 
 60 dosyalık sınır Faz 6'nın kullanıcıya görünür kapsam sınırıdır. Daha büyük PR'lar için pagination ve daha ileri review-size yönetimi Faz 7 kapsamındadır; bu fazda yapılmamıştır.
@@ -44,7 +44,7 @@ Bu durumda:
 
 - Taranan kapsamda bulgu varsa bulgular yayınlanır ve sonucun kısmi olduğu belirtilir.
 - Taranan kapsamda bulgu yoksa güvenlik seviyesi **unknown** kalır; "güvenli" denmez.
-- Desteklenmeyen dosya türleri kullanıcıdan gizlenmez.
+- Desteklenmeyen dosya türleri ve 1 MB üzerindeki dosyalar kullanıcıdan gizlenmez.
 
 ## Gemini güvenlik sınırı
 
@@ -70,6 +70,7 @@ Böylece AI çıktısı güvenlik tespitinin kaynağı değil, mevcut determinis
 - [x] Maksimum dosya sayısı açık.
 - [x] Maksimum diff boyutu açık.
 - [x] Unsupported file handling kullanıcıya yansıyor.
+- [x] 1 MB üzerindeki tekil dosyalar partial scan olarak işaretleniyor.
 - [x] File-cap partial scan kullanıcıya yansıyor.
 - [x] Partial scan hiçbir durumda "safe" sayılmıyor.
 - [x] Gemini severity/location üretmiyor veya değiştirmiyor.
