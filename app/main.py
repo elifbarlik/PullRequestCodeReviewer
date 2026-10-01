@@ -310,6 +310,37 @@ async def health_check():
 
 
 # -------------------------------------------------------------------
+# Product dashboard API (Faz 10)
+# -------------------------------------------------------------------
+
+@app.get("/dashboard/api/summary")
+async def dashboard_summary(request: Request):
+    _verify_admin_token(request)
+    result = get_dashboard_summary()
+    if result is None:
+        raise HTTPException(status_code=503, detail="Dashboard veri katmanı kullanılamıyor")
+    return result
+
+
+@app.get("/dashboard/api/reviews")
+async def dashboard_reviews(request: Request, limit: int = 20):
+    _verify_admin_token(request)
+    result = get_recent_review_runs(limit)
+    if result is None:
+        raise HTTPException(status_code=503, detail="Dashboard veri katmanı kullanılamıyor")
+    return {"reviews": result}
+
+
+@app.get("/dashboard/api/reviews/{review_run_id}")
+async def dashboard_review_detail(review_run_id: int, request: Request):
+    _verify_admin_token(request)
+    result = get_review_run_detail(review_run_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Review bulunamadı")
+    return result
+
+
+# -------------------------------------------------------------------
 # Endpoint: istatistikler
 # -------------------------------------------------------------------
 
