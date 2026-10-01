@@ -11,12 +11,32 @@ function escapeHtml(value){
   return String(value).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
 
+async function loadSettings(id){
+  const d=await api("/installations/"+encodeURIComponent(id)+"/settings");
+  $("settings-enabled").checked=!!d.enabled;
+  $("settings-status").textContent=d.semgrep_configs ? "Özel ruleset: "+d.semgrep_configs.join(", ") : "Varsayılan Semgrep ruleset'i kullanılıyor.";
+}
+async function saveSettings(reset=false){
+  const id=$("installation-select").value;
+  if(!id) return;
+  const body=reset ? {reset_configs:true} : {enabled:$("settings-enabled").checked};
+  const res=await fetch("/installations/"+encodeURIComponent(id)+"/settings",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  if(!res.ok) throw new Error(String(res.status));
+  const d=await res.json();
+  $("settings-enabled").checked=!!d.enabled;
+  $("settings-status").textContent=d.semgrep_configs ? "Özel ruleset: "+d.semgrep_configs.join(", ") : "Varsayılan Semgrep ruleset'i kullanılıyor.";
+}
+
 async function load(){
   $("error").textContent="";
   try{
     const me=await api("/auth/me");
     $("session-status").textContent="● "+me.login;
     $("login").hidden=true; $("logout").hidden=false;
+    const ids=me.installation_ids || [];
+    $("installation-select").innerHTML=ids.map(id=>`<option value="${id}">${id}</option>`).join("");
+    $("settings-panel").hidden=ids.length===0;
+    if(ids.length) await loadSettings(ids[0]);
     const [summary,recent]=await Promise.all([
       api("/dashboard/api/summary"),
       api("/dashboard/api/reviews?limit=20")
@@ -71,3 +91,7 @@ document.addEventListener("click",(event)=>{
   const row=event.target.closest(".review-row");
   if(row) showDetail(row.dataset.reviewId);
 });
+
+$("installation-select").addEventListener("change",()=>loadSettings($("installation-select").value).catch(()=>{$("settings-status").textContent="Ayarlar alınamadı.";}));
+$("save-settings").addEventListener("click",()=>saveSettings(false).catch(()=>{$("settings-status").textContent="Ayarlar kaydedilemedi.";}));
+$("reset-settings").addEventListener("click",()=>saveSettings(true).catch(()=>{$("settings-status").textContent="Varsayılan ayarlar uygulanamadı.";}));
