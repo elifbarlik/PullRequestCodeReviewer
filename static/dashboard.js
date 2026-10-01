@@ -34,7 +34,12 @@ async function load(){
     $("session-status").textContent="● "+me.login;
     $("login").hidden=true; $("logout").hidden=false;
     const ids=me.installation_ids || [];
-    $("installation-select").innerHTML=ids.map(id=>`<option value="${id}">${id}</option>`).join("");
+    const details=me.installation_details || {};
+    $("installation-select").innerHTML=ids.map(id=>{
+      const item=details[String(id)] || {};
+      const label=item.login ? `${item.login} (${item.type === "Organization" ? "organization" : "account"})` : `Installation ${id}`;
+      return `<option value="${id}">${escapeHtml(label)}</option>`;
+    }).join("");
     $("settings-panel").hidden=ids.length===0;
     if(ids.length) await loadSettings(ids[0]);
     const [summary,recent]=await Promise.all([
