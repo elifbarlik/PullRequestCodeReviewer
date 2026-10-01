@@ -42,9 +42,9 @@ def test_oauth_finish_does_not_put_access_token_in_session(monkeypatch):
     request = SimpleNamespace(cookies={github_oauth.STATE_COOKIE: state}, base_url="https://example.com/")
     response = github_oauth.finish_login(request, "code", "abc")
     assert "gho_SECRET" not in str(response.headers)
-    cookie = response.headers["set-cookie"]
-    assert "secpr_session=" in cookie
-    session_value = cookie.split("secpr_session=", 1)[1].split(";", 1)[0].strip('"')
+    cookies = [value.decode() for key, value in response.raw_headers if key.lower() == b"set-cookie"]
+    session_cookie = next(value for value in cookies if value.startswith("secpr_session="))
+    session_value = session_cookie.split("secpr_session=", 1)[1].split(";", 1)[0].strip('"')
     session = github_oauth._verify(session_value)
     assert session["sub"] == 42
     assert session["login"] == "elif"
