@@ -405,7 +405,12 @@ async def github_me(request: Request):
     user = current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="GitHub ile giriş gerekli")
-    return {"id": user["sub"], "login": user["login"], "installations": len(user.get("installations", []))}
+    return {
+        "id": user["sub"],
+        "login": user["login"],
+        "installations": len(user.get("installations", [])),
+        "installation_ids": [int(x) for x in user.get("installations", [])],
+    }
 
 
 # -------------------------------------------------------------------
