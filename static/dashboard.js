@@ -66,3 +66,8 @@ async function showDetail(id){
   }catch(e){ $("error").textContent="Review detayı alınamadı."; }
 }
 $("close-detail").addEventListener("click",()=>{$("detail").hidden=true;});
+
+document.addEventListener("click",(event)=>{
+  const row=event.target.closest(".review-row");
+  if(row) showDetail(row.dataset.reviewId);
+});
