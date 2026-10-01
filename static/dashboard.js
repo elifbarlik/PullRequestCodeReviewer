@@ -49,3 +49,20 @@ $("logout").addEventListener("click",async()=>{
 });
 $("refresh").addEventListener("click",load);
 load();
+async function showDetail(id){
+  try{
+    const d=await api("/dashboard/api/reviews/"+encodeURIComponent(id));
+    $("detail").hidden=false;
+    $("detail-content").innerHTML=`
+      <div class="cards">
+        <div class="card"><span>Repository</span><strong>${escapeHtml(d.repository)}</strong></div>
+        <div class="card"><span>PR</span><strong>#${d.pr_number}</strong></div>
+        <div class="card"><span>Status</span><strong>${escapeHtml(d.status)}</strong></div>
+        <div class="card"><span>Findings</span><strong>${Number(d.findings_count||0)}</strong></div>
+      </div>
+      <p class="muted">Commit: ${escapeHtml(d.head_sha)}</p>
+      <p class="muted">Files scanned: ${Number(d.files_scanned||0)}</p>
+      <p class="muted">Critical ${d.severity.critical} · High ${d.severity.high} · Medium ${d.severity.medium} · Low ${d.severity.low}</p>`;
+  }catch(e){ $("error").textContent="Review detayı alınamadı."; }
+}
+$("close-detail").addEventListener("click",()=>{$("detail").hidden=true;});
