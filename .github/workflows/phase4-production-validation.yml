@@ -42,11 +42,26 @@ jobs:
           echo "LOG_FORMAT=$log_format"
           test "$log_format" = "json"
 
-      - name: Emit structured logging smoke record
+      - name: Capture and verify structured application log
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           set -euo pipefail
+
+          # Start the live Fly log stream BEFORE emitting the smoke record.
+          # --no-tail only reads the current buffer; it can miss a record that
+          # is emitted immediately before the snapshot is requested.
+          flyctl logs -a "$FLY_APP" --json > fly-production-logs.jsonl &
+          logs_pid=$!
+
+          cleanup() {
+            kill "$logs_pid" 2>/dev/null || true
+            wait "$logs_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          sleep 2
+
           result="$(flyctl ssh console -a "$FLY_APP" -q -C 'python -c "import os,urllib.request; r=urllib.request.Request(\"http://127.0.0.1:8000/admin/logging-test\",method=\"POST\",headers={\"X-Admin-Token\":os.environ[\"ADMIN_SECRET\"]}); print(urllib.request.urlopen(r,timeout=10).read().decode())"')"
           echo "$result"
           python - <<'PY' "$result"
@@ -56,17 +71,11 @@ jobs:
           print("structured-log-endpoint: PASS")
           PY
 
-      - name: Capture and verify structured application log
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: |
-          set -euo pipefail
-          found=0
-          for attempt in $(seq 1 6); do
-            echo "Capturing production logs (attempt $attempt/6)..."
-            flyctl logs -a "$FLY_APP" --no-tail --json > fly-production-logs.jsonl
+          sleep 3
+          cleanup
+          trap - EXIT
 
-            if python - <<'PY'
+          python - <<'PY'
           import json
           target = "SecPR-TR structured logging smoke test"
           with open("fly-production-logs.jsonl", encoding="utf-8") as f:
@@ -76,8 +85,6 @@ jobs:
                   except json.JSONDecodeError:
                       continue
 
-                  # Fly may expose the application record as nested JSON in
-                  # message/text, or as already-decoded structured fields.
                   candidates = [outer]
                   message = str(outer.get("message") or outer.get("text") or "")
                   if message:
@@ -93,18 +100,9 @@ jobs:
                           print(item)
                           print("structured-log-output: PASS")
                           raise SystemExit(0)
-          raise SystemExit("structured log smoke record not found in current log window")
+
+          raise SystemExit("structured log smoke record not found in live log stream")
           PY
-            then
-              found=1
-              break
-            fi
-
-            echo "Structured log not visible yet; waiting 5s..."
-            sleep 5
-          done
-
-          test "$found" = "1"
       - name: Trigger Sentry smoke test when configured
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
