@@ -61,6 +61,10 @@ def _verify(value: str, required_exp: bool = True) -> Optional[dict[str, Any]]:
         return None
 
 
+def _secure_cookie(request: Request) -> bool:
+    return request.url.scheme == "https"
+
+
 def _client_id() -> str:
     value = os.getenv("GITHUB_OAUTH_CLIENT_ID", "").strip()
     if not value:
@@ -88,7 +92,7 @@ def start_login(request: Request) -> RedirectResponse:
     response = RedirectResponse(GITHUB_AUTHORIZE_URL + "?" + urlencode(params), status_code=302)
     response.set_cookie(
         STATE_COOKIE, state_value, max_age=STATE_TTL_SECONDS, httponly=True,
-        secure=os.getenv("ENVIRONMENT", "production") != "local",
+        secure=_secure_cookie(request),
         samesite="lax",
     )
     return response
