@@ -54,7 +54,7 @@ SUPPORTED_FILE_EXTENSIONS = tuple(
     ext for extensions in SUPPORTED_LANGUAGE_EXTENSIONS.values() for ext in extensions
 )
 MAX_SCAN_FILES = 60
-MAX_DIFF_BYTES = 512 * 1024
+MAX_DIFF_BYTES = 512 * 1024  # 512 KiB security-scan input ceiling
 
 
 def build_scan_plan(pr_files: List[dict], max_files: int = MAX_SCAN_FILES) -> dict:
