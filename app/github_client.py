@@ -164,7 +164,10 @@ class GitHubAppClient:
         response = requests.post(url, headers=headers, timeout=10)
 
         if response.status_code != 201:
-            logger.error(f"Token alınamadı: {response.status_code} — {response.text}")
+            logger.error(
+                "GitHub installation token request failed: status=%s",
+                response.status_code,
+            )
             response.raise_for_status()
 
         data = response.json()
