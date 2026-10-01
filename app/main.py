@@ -37,6 +37,7 @@ from app.semgrep_scanner import (
     validate_configs,
     build_scan_plan,
     MAX_DIFF_BYTES,
+    MAX_SCAN_FILE_BYTES,
 )
 from app.diff_utils import parse_added_lines
 from app.db import init_db
@@ -553,19 +554,34 @@ def _run_semgrep_for_pr(
         logger.error(f"❌ PR dosya içerikleri alınamadı, Semgrep atlanıyor: {e}")
         return {"status": "error", "error": f"PR dosyaları alınamadı: {e}"}
 
+    oversized = [
+        path for path, content in files_content.items()
+        if len(content.encode("utf-8", errors="replace")) > MAX_SCAN_FILE_BYTES
+    ]
+    for path in oversized:
+        files_content.pop(path, None)
+
     try:
         findings = scan_diff(files_content, diff_text, configs=configs)
         result = {"status": "ok", "findings": findings}
 
-        skipped = skipped_for_cap + unsupported_count
+        skipped = skipped_for_cap + unsupported_count + len(oversized)
         if skipped:
+            reasons = []
+            if skipped_for_cap:
+                reasons.append("file_scope_limit")
+            if unsupported_count:
+                reasons.append("unsupported_files")
+            if oversized:
+                reasons.append("file_size_limit")
             result.update({
                 "partial": True,
-                "partial_reason": "file_scope_limit" if skipped_for_cap else "unsupported_files",
+                "partial_reason": ",".join(reasons),
                 "supported_count": plan["supported_count"],
-                "scanned_count": len(candidates),
+                "scanned_count": len(files_content),
                 "unsupported_count": unsupported_count,
                 "skipped_for_cap": skipped_for_cap,
+                "oversized_count": len(oversized),
                 "removed_count": plan["removed_count"],
                 "message": (
                     f"Partial scan: {skipped} değişen dosya güvenlik taramasının "
