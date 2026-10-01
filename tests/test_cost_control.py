@@ -68,3 +68,32 @@ def test_usage_collector_accumulates_calls_and_cache_hits():
     assert snapshot["calls"] == 1
     assert snapshot["cache_hits"] == 1
     assert snapshot["cost_usd"] == 0.0001
+
+
+def test_cache_key_does_not_expose_prompt():
+    from app.cost_control import build_cache_key
+    key = build_cache_key(
+        model="gemini-2.5-flash",
+        prompt="SECRET_SOURCE_CODE_SHOULD_NOT_APPEAR",
+        max_tokens=100,
+        temperature=0.1,
+        use_json_mode=True,
+    )
+    assert "SECRET_SOURCE_CODE_SHOULD_NOT_APPEAR" not in key
+    assert len(key) == 64
+
+
+def test_usage_snapshot_has_cost_metrics():
+    collector = LLMUsageCollector()
+    collector.record_api_call({
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "cost_usd": 0.0001,
+    })
+    collector.record_cache_hit()
+    snapshot = collector.snapshot()
+    assert snapshot["input_tokens"] == 10
+    assert snapshot["output_tokens"] == 5
+    assert snapshot["calls"] == 1
+    assert snapshot["cache_hits"] == 1
+    assert snapshot["cost_usd"] == 0.0001
