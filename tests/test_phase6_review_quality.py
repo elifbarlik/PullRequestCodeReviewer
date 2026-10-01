@@ -8,6 +8,7 @@ from app.semgrep_scanner import (
     build_scan_plan,
 )
 from app import reviewer
+from app.main import _run_semgrep_for_pr
 
 
 def test_phase6_scan_plan_separates_supported_and_unsupported_files():
@@ -84,3 +85,42 @@ def test_scan_error_is_not_safe():
     assert result["security_level"] == "unknown"
     assert result["partial_scan"] is True
     assert result["partial_reason"] == "diff_size_limit"
+
+
+class _FakeClient:
+    def __init__(self):
+        self.calls = []
+
+    def get_files_content(self, owner, repo, filenames, ref):
+        self.calls.append((owner, repo, filenames, ref))
+        return {name: "x = 1\n" for name in filenames}
+
+
+def test_phase6_diff_size_limit_skips_semgrep(monkeypatch):
+    called = {"scan": False}
+
+    def fake_scan(*args, **kwargs):
+        called["scan"] = True
+        return []
+
+    monkeypatch.setattr("app.main.scan_diff", fake_scan)
+    result = __import__("asyncio").run(_run_semgrep_for_pr(
+        _FakeClient(), "o", "r", 1, "x" * (MAX_DIFF_BYTES + 1), "sha",
+        [{"filename": "app.py", "status": "modified"}],
+    ))
+
+    assert result["status"] == "unavailable"
+    assert result["partial_reason"] == "diff_size_limit"
+    assert called["scan"] is False
+
+
+def test_phase6_unsupported_only_pr_is_partial_not_safe(monkeypatch):
+    result = __import__("asyncio").run(_run_semgrep_for_pr(
+        _FakeClient(), "o", "r", 1, "diff", "sha",
+        [{"filename": "README.md", "status": "modified"}],
+    ))
+
+    assert result["status"] == "ok"
+    assert result["findings"] == []
+    assert result["partial"] is True
+    assert result["partial_reason"] == "unsupported_files"
