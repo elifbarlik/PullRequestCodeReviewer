@@ -31,6 +31,59 @@ logger = logging.getLogger(__name__)
 # önceden cache'liyor — Faz 4.4).
 DEFAULT_SEMGREP_CONFIGS = ["p/default", "p/python", "p/security-audit", "p/secrets"]
 
+# Faz 6 — Semgrep tarama sözleşmesi. Desteklenen dosya türleri, tarama
+# kapasitesi ve varsayılan ruleset'ler ürün davranışının açık parçasıdır.
+SUPPORTED_LANGUAGE_EXTENSIONS = {
+    "Python": (".py",),
+    "JavaScript": (".js", ".jsx"),
+    "TypeScript": (".ts", ".tsx"),
+    "Go": (".go",),
+    "Java": (".java",),
+    "Ruby": (".rb",),
+    "PHP": (".php",),
+    "C": (".c",),
+    "C++": (".cc", ".cpp"),
+    "C#": (".cs",),
+    "Scala": (".scala",),
+    "Kotlin": (".kt",),
+    "Rust": (".rs",),
+    "Shell": (".sh",),
+    "YAML": (".yaml", ".yml"),
+}
+SUPPORTED_FILE_EXTENSIONS = tuple(
+    ext for extensions in SUPPORTED_LANGUAGE_EXTENSIONS.values() for ext in extensions
+)
+MAX_SCAN_FILES = 60
+MAX_DIFF_BYTES = 512 * 1024  # 512 KiB security-scan input ceiling
+MAX_SCAN_FILE_BYTES = 1_000_000  # keep in sync with Semgrep --max-target-bytes
+
+
+def build_scan_plan(pr_files: List[dict], max_files: int = MAX_SCAN_FILES) -> dict:
+    """Build a deterministic PR scan plan and expose skipped-file reasons."""
+    candidates = []
+    unsupported = []
+    removed = 0
+    for item in pr_files:
+        filename = item.get("filename")
+        if item.get("status") == "removed":
+            removed += 1
+            continue
+        if not filename:
+            continue
+        if filename.lower().endswith(SUPPORTED_FILE_EXTENSIONS):
+            candidates.append(filename)
+        else:
+            unsupported.append(filename)
+
+    skipped_for_cap = max(0, len(candidates) - max_files)
+    return {
+        "candidates": candidates[:max_files],
+        "supported_count": len(candidates),
+        "unsupported_count": len(unsupported),
+        "skipped_for_cap": skipped_for_cap,
+        "removed_count": removed,
+    }
+
 # Semgrep OSS "ERROR/WARNING/INFO" seviyelerini SecPR-TR'nin risk
 # skalasına (critical/high/medium/low) eşler. Semgrep OSS varsayılan
 # olarak "critical" üretmez — bu skala reviewer.py'daki SECURITY_REVIEW
