@@ -583,19 +583,19 @@ def get_detailed_metrics(installation_ids: Optional[List[int]] = None) -> Option
             ) or 0.0
             month_input_tokens = session.scalar(
                 select(func.coalesce(func.sum(UsageLog.input_tokens), 0))
-                .where(UsageLog.created_at >= month_start)
+                .where(UsageLog.created_at >= month_start, UsageLog.installation_id.in_(installation_ids))
             ) or 0
             month_output_tokens = session.scalar(
                 select(func.coalesce(func.sum(UsageLog.output_tokens), 0))
-                .where(UsageLog.created_at >= month_start)
+                .where(UsageLog.created_at >= month_start, UsageLog.installation_id.in_(installation_ids))
             ) or 0
             cache_hits = session.scalar(
                 select(func.coalesce(func.sum(UsageLog.llm_cache_hits), 0))
-                .where(UsageLog.created_at >= month_start)
+                .where(UsageLog.created_at >= month_start, UsageLog.installation_id.in_(installation_ids))
             ) or 0
             llm_calls = session.scalar(
                 select(func.coalesce(func.sum(UsageLog.llm_calls), 0))
-                .where(UsageLog.created_at >= month_start)
+                .where(UsageLog.created_at >= month_start, UsageLog.installation_id.in_(installation_ids))
             ) or 0
 
             recent_rows = session.execute(
@@ -605,7 +605,7 @@ def get_detailed_metrics(installation_ids: Optional[List[int]] = None) -> Option
                     UsageLog.t_semgrep_ms,
                     UsageLog.t_gemini_ms,
                     UsageLog.semgrep_status,
-                ).where(UsageLog.created_at >= day_ago)
+                ).where(UsageLog.created_at >= day_ago, UsageLog.installation_id.in_(installation_ids))
             ).all()
 
         durations = sorted(
