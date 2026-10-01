@@ -64,7 +64,7 @@ def test_stats_endpoint_requires_authenticated_installation_scope(monkeypatch):
     from app import main, repository
     from fastapi.testclient import TestClient
 
-    monkeypatch.setattr(repository, "get_stats_summary", lambda installation_ids=None: {
+    monkeypatch.setattr(main, "get_stats_summary", lambda installation_ids=None: {
         "installations_total": len(installation_ids or []),
         "installations_active": len(installation_ids or []),
         "reviews_total": 3,
