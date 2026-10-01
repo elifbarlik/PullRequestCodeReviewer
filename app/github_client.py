@@ -168,6 +168,16 @@ class GitHubAppClient:
             response.raise_for_status()
 
         data = response.json()
+
+        # GitHub may return the effective permission set for the installation
+        # token. Fail closed if the token is not usable for the review engine.
+        from app.github_security import validate_token_permissions
+        if not validate_token_permissions(data.get("permissions")):
+            raise RuntimeError(
+                "GitHub installation token does not expose the required "
+                "pull_requests=write, contents=read, metadata=read permissions"
+            )
+
         token = data["token"]
 
         # GitHub ISO 8601 döndürür, unix timestamp'e çevir
