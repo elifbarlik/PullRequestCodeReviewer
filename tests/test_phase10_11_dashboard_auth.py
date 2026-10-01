@@ -57,3 +57,27 @@ def test_dashboard_query_functions_have_empty_scope(monkeypatch):
     assert repository.get_dashboard_summary([])["total_reviews"] == 0
     assert repository.get_recent_review_runs(20, []) == []
     assert repository.get_review_run_detail(1, []) is None
+
+
+def test_stats_endpoint_requires_authenticated_installation_scope(monkeypatch):
+    monkeypatch.setenv("GITHUB_OAUTH_SESSION_SECRET", "test-secret")
+    from app import main, repository
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(repository, "get_stats_summary", lambda installation_ids=None: {
+        "installations_total": len(installation_ids or []),
+        "installations_active": len(installation_ids or []),
+        "reviews_total": 3,
+        "reviews_last_7d": 2,
+    })
+
+    client = TestClient(main.app)
+    response = client.get("/stats")
+    assert response.status_code == 401
+
+    from app.github_oauth import _sign
+    cookie = _sign({"sub": 42, "login": "elif", "installations": [99], "exp": int(time.time()) + 60})
+    client.cookies.set("secpr_session", cookie)
+    response = client.get("/stats")
+    assert response.status_code == 200
+    assert response.json()["usage"]["installations_total"] == 1
