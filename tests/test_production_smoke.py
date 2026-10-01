@@ -64,7 +64,8 @@ def test_webhook_requires_valid_signature(smoke_client):
     assert response.status_code == 403
 
 
-def test_metrics_endpoint(smoke_client):
+def test_metrics_endpoint(smoke_client, monkeypatch):
+    monkeypatch.setattr(main, "require_user", lambda request: {"installations": []})
     response = smoke_client.get("/metrics")
     assert response.status_code == 200
     body = response.json()

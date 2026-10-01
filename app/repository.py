@@ -540,7 +540,7 @@ def check_rate_limit(installation_id: int, limit_per_hour: int = 50) -> bool:
         return True
 
 
-def get_detailed_metrics() -> Optional[Dict[str, Any]]:
+def get_detailed_metrics(installation_ids: Optional[List[int]] = None) -> Optional[Dict[str, Any]]:
     """Operational and cost metrics for the dashboard/metrics endpoint."""
     if not db_enabled():
         return None
@@ -548,6 +548,20 @@ def get_detailed_metrics() -> Optional[Dict[str, Any]]:
         from datetime import datetime, timedelta, timezone
         from sqlalchemy import func, select
         from app.models import Finding, UsageLog
+
+        if installation_ids is not None:
+            installation_ids = [int(x) for x in installation_ids]
+        if installation_ids == []:
+            return {
+                "reviews_last_24h": 0, "reviews_last_7d": 0,
+                "avg_duration_ms_24h": 0.0, "p50_duration_ms_24h": 0.0,
+                "p95_duration_ms_24h": 0.0,
+                "avg_timing_ms_24h": {"github": 0.0, "semgrep_and_summary": 0.0, "gemini_detail": 0.0},
+                "semgrep_unavailable_rate_pct_24h": 0.0, "findings_last_24h": 0,
+                "gemini_cost_usd_month": 0.0, "gemini_input_tokens_month": 0,
+                "gemini_output_tokens_month": 0, "llm_calls_month": 0,
+                "llm_cache_hits_month": 0, "llm_cache_hit_rate_pct_month": 0.0,
+            }
 
         now = datetime.now(timezone.utc)
         day_ago = now - timedelta(hours=24)
