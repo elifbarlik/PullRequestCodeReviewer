@@ -31,7 +31,13 @@ from app.reviewer import (
     ParseStatistics,
 )
 from app.github_client import GitHubAppClient
-from app.semgrep_scanner import scan_diff, SemgrepNotAvailable, validate_configs
+from app.semgrep_scanner import (
+    scan_diff,
+    SemgrepNotAvailable,
+    validate_configs,
+    build_scan_plan,
+    MAX_DIFF_BYTES,
+)
 from app.diff_utils import parse_added_lines
 from app.db import init_db
 from app.web import router as web_router
@@ -487,13 +493,8 @@ async def local_review(request: Request, body: DiffRequest):
 # İç yardımcı: PR analizi ve yorum gönderme
 # -------------------------------------------------------------------
 
-# Büyük PR'larda Semgrep'e gönderilecek dosyaları sınırlamak için —
-# bu uzantılar dışındakiler (lock dosyaları, üretilmiş kod, varlıklar)
-# hem Semgrep ruleset kapsamı dışında hem de gereksiz I/O.
-_SCANNABLE_EXTENSIONS = (
-    ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".java", ".rb", ".php",
-    ".c", ".cc", ".cpp", ".cs", ".scala", ".kt", ".rs", ".sh", ".yaml", ".yml",
-)
+# Faz 6: Semgrep tarama politikası semgrep_scanner.py'deki tek sözleşmeden
+# gelir; burada ayrı bir uzantı listesi tutulmaz.
 _MAX_SCAN_FILES = 60
 
 
@@ -507,40 +508,40 @@ def _run_semgrep_for_pr(
     pr_files: List[dict],
     configs: Optional[List[str]] = None,
 ) -> dict:
-    """
-    Verilen PR dosya listesinin içeriğini paralel çekip Semgrep'i çalıştırır.
-
-    `head_sha` ve `pr_files` DIŞARIDAN verilir — bu fonksiyon artık kendi
-    GitHub API çağrısını yapmaz (çağıran `get_pr_bundle` ile hepsini bir
-    kez paralel çekiyor).
-
-    Dönüş şekli main.py <-> reviewer.py arasındaki sözleşmedir:
-      {"status": "ok", "findings": [...]}          — tarama başarıyla çalıştı
-      {"status": "unavailable", "error": "..."}    — semgrep CLI kurulu değil
-      {"status": "error", "error": "..."}          — GitHub API veya semgrep hata verdi
-
-    "findings": [] (boş liste) ile status="unavailable"/"error" KESİNLİKLE
-    karıştırılmamalı — biri "tarandı, temiz", diğeri "hiç taranamadı" demek.
-    """
+    """Run the Phase 6 bounded Semgrep scan and expose partial-scan state."""
     if not head_sha:
         return {"status": "error", "error": "PR head SHA'sı bulunamadı"}
 
-    # Silinen dosyaları ve taranamaz uzantıları ele; büyük PR'da tavan uygula.
-    candidates = [
-        f["filename"]
-        for f in pr_files
-        if f.get("status") != "removed"
-        and f.get("filename")
-        and f["filename"].endswith(_SCANNABLE_EXTENSIONS)
-    ]
-    skipped_for_cap = 0
-    if len(candidates) > _MAX_SCAN_FILES:
-        skipped_for_cap = len(candidates) - _MAX_SCAN_FILES
-        candidates = candidates[:_MAX_SCAN_FILES]
-        logger.warning(
-            f"⚠️  {len(pr_files)} değişen dosya — Semgrep ilk {_MAX_SCAN_FILES} "
-            f"taranabilir dosyayla sınırlandı ({skipped_for_cap} atlandı)"
-        )
+    diff_bytes = len(diff_text.encode("utf-8", errors="replace"))
+    if diff_bytes > MAX_DIFF_BYTES:
+        return {
+            "status": "unavailable",
+            "error": (
+                f"Diff boyutu {diff_bytes} byte; güvenlik taraması için "
+                f"izin verilen üst sınır {MAX_DIFF_BYTES} byte."
+            ),
+            "partial": True,
+            "partial_reason": "diff_size_limit",
+            "diff_bytes": diff_bytes,
+            "max_diff_bytes": MAX_DIFF_BYTES,
+        }
+
+    plan = build_scan_plan(pr_files, max_files=_MAX_SCAN_FILES)
+    candidates = plan["candidates"]
+    skipped_for_cap = plan["skipped_for_cap"]
+    unsupported_count = plan["unsupported_count"]
+
+    if not candidates:
+        # PR yalnızca desteklenmeyen/çıkarılmış dosyalardan oluşuyorsa
+        # "safe" demiyoruz; taramanın kapsamını kullanıcıya açıkça bildiriyoruz.
+        return {
+            "status": "unavailable",
+            "error": "Bu PR'de Semgrep tarafından desteklenen taranabilir dosya bulunamadı.",
+            "partial": unsupported_count > 0,
+            "partial_reason": "unsupported_files" if unsupported_count else "no_scan_targets",
+            "unsupported_count": unsupported_count,
+            "removed_count": plan["removed_count"],
+        }
 
     try:
         files_content = client.get_files_content(owner, repo, candidates, ref=head_sha)
@@ -551,8 +552,22 @@ def _run_semgrep_for_pr(
     try:
         findings = scan_diff(files_content, diff_text, configs=configs)
         result = {"status": "ok", "findings": findings}
-        if skipped_for_cap:
-            result["partial"] = f"{skipped_for_cap} dosya boyut sınırı nedeniyle taranmadı"
+
+        skipped = skipped_for_cap + unsupported_count
+        if skipped:
+            result.update({
+                "partial": True,
+                "partial_reason": "file_scope_limit" if skipped_for_cap else "unsupported_files",
+                "supported_count": plan["supported_count"],
+                "scanned_count": len(candidates),
+                "unsupported_count": unsupported_count,
+                "skipped_for_cap": skipped_for_cap,
+                "removed_count": plan["removed_count"],
+                "message": (
+                    f"Partial scan: {skipped} değişen dosya güvenlik taramasının "
+                    "kapsamı dışında kaldı."
+                ),
+            })
         return result
     except SemgrepNotAvailable as e:
         logger.warning(f"⚠️  Semgrep CLI kurulu değil, güvenlik taraması atlanıyor: {e}")
