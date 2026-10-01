@@ -765,30 +765,47 @@ def get_review_run_detail(review_run_id: int, installation_ids: Optional[List[in
 # /stats için okuma yardımcıları
 # -------------------------------------------------------------------
 
-def get_stats_summary() -> Optional[Dict[str, Any]]:
+def get_stats_summary(installation_ids: Optional[List[int]] = None) -> Optional[Dict[str, Any]]:
     """
-    /stats endpoint'i için özet sayaçlar. DB kapalıysa None.
+    /stats için özet sayaçlar. installation_ids verildiğinde tüm metrikler
+    yalnızca kullanıcının erişebildiği installation'larla sınırlıdır.
     """
     if not db_enabled():
         return None
+    installation_ids = [int(x) for x in (installation_ids or [])]
+    if not installation_ids:
+        return {
+            "installations_total": 0,
+            "installations_active": 0,
+            "reviews_total": 0,
+            "reviews_last_7d": 0,
+        }
     try:
         from datetime import datetime, timedelta, timezone
-
         from sqlalchemy import func, select
-
         from app.models import Installation, UsageLog
 
+        scope = Installation.id.in_(installation_ids)
         with get_session() as session:
             total_installations = session.scalar(
-                select(func.count()).select_from(Installation)
+                select(func.count()).select_from(Installation).where(scope)
             )
             active_installations = session.scalar(
-                select(func.count()).select_from(Installation).where(Installation.is_active.is_(True))
+                select(func.count()).select_from(Installation).where(
+                    scope, Installation.is_active.is_(True)
+                )
             )
-            total_reviews = session.scalar(select(func.count()).select_from(UsageLog))
+            total_reviews = session.scalar(
+                select(func.count()).select_from(UsageLog).where(
+                    UsageLog.installation_id.in_(installation_ids)
+                )
+            )
             week_ago = datetime.now(timezone.utc) - timedelta(days=7)
             reviews_7d = session.scalar(
-                select(func.count()).select_from(UsageLog).where(UsageLog.created_at >= week_ago)
+                select(func.count()).select_from(UsageLog).where(
+                    UsageLog.installation_id.in_(installation_ids),
+                    UsageLog.created_at >= week_ago,
+                )
             )
         return {
             "installations_total": total_installations or 0,

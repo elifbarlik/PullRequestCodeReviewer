@@ -214,11 +214,17 @@ class TestStatsSummary:
         repository.record_usage(installation_id=1, owner="a", repo="r", pr_number=1)
         repository.record_usage(installation_id=1, owner="a", repo="r", pr_number=2)
 
-        summary = repository.get_stats_summary()
-        assert summary["installations_total"] == 2
+        summary = repository.get_stats_summary([1])
+        assert summary["installations_total"] == 1
         assert summary["installations_active"] == 1
         assert summary["reviews_total"] == 2
         assert summary["reviews_last_7d"] == 2
+
+        scoped = repository.get_stats_summary([2])
+        assert scoped["installations_total"] == 1
+        assert scoped["installations_active"] == 0
+        assert scoped["reviews_total"] == 0
+        assert scoped["reviews_last_7d"] == 0
 
 
 class TestRateLimit:
