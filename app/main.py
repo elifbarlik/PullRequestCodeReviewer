@@ -1286,6 +1286,11 @@ def _format_review_comment(
             elif security.get("has_security_issues"):
                 total = len(security.get("vulnerabilities", []))
                 comment += "### 🚨 Güvenlik Bulguları (Semgrep + Gemini)\n"
+                if security.get("partial_scan"):
+                    comment += (
+                        "⚠️ **Kısmi tarama:** PR'nin tamamı Semgrep kapsamına girmedi; "
+                        "aşağıdaki bulgular yalnızca taranan kapsam içindir.\n\n"
+                    )
                 if inline_count:
                     comment += (
                         f"**{inline_count}/{total}** bulgu ilgili satırlara yorum olarak "
