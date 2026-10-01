@@ -47,6 +47,11 @@ def spy_pr_handler(monkeypatch):
 
 
 def _post(client, event, payload, delivery="d-1"):
+    if event == "pull_request":
+        payload = {
+            **payload,
+            "installation": payload.get("installation", {"id": 100}),
+        }
     body = json.dumps(payload).encode()
     return client.post(
         "/webhook",
@@ -66,7 +71,9 @@ class TestWebhookPrEvent:
         assert r.status_code == 200          # FastAPI TestClient bg task'ları senkron koşturur
         assert r.json()["status"] == "accepted"
         # BackgroundTasks TestClient'ta response'tan sonra çalışır — çağrıldı mı?
-        assert spy_pr_handler == [("opened", {"action": "opened", "number": 1})]
+        assert spy_pr_handler[0][0] == "opened"
+        assert spy_pr_handler[0][1]["number"] == 1
+        assert spy_pr_handler[0][1]["installation"]["id"] == 100
 
     def test_pr_non_actionable_action_ignored(self, client, spy_pr_handler):
         r = _post(client, "pull_request", {"action": "labeled"})
