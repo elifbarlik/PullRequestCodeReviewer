@@ -55,6 +55,7 @@ SUPPORTED_FILE_EXTENSIONS = tuple(
 )
 MAX_SCAN_FILES = 60
 MAX_DIFF_BYTES = 512 * 1024  # 512 KiB security-scan input ceiling
+MAX_SCAN_FILE_BYTES = 1_000_000  # keep in sync with Semgrep --max-target-bytes
 
 
 def build_scan_plan(pr_files: List[dict], max_files: int = MAX_SCAN_FILES) -> dict:
