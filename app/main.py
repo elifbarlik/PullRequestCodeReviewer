@@ -17,7 +17,7 @@ Kimlik doğrulama:
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -80,6 +80,7 @@ import time
 from dotenv import load_dotenv
 import logging
 import shutil
+import uuid
 
 from sqlalchemy import text
 
@@ -167,6 +168,34 @@ async def _lifespan(_app: "FastAPI"):
 
 
 app = FastAPI(title="SecPR-TR", version=APP_VERSION, lifespan=_lifespan)
+
+# Phase 15: correlation ids + sanitized unexpected-error responses.
+@app.middleware("http")
+async def request_context_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID", "").strip()[:128] or uuid.uuid4().hex
+    request.state.request_id = request_id
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("Unhandled request exception", extra={"request_id": request_id, "path": request.url.path})
+        response = Response(
+            status_code=500,
+            content=json.dumps({"detail": "Internal server error", "request_id": request_id}),
+            media_type="application/json",
+        )
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    request_id = getattr(request.state, "request_id", uuid.uuid4().hex)
+    logger.exception("Unhandled application exception", extra={"request_id": request_id, "path": request.url.path})
+    return Response(
+        status_code=500,
+        content=json.dumps({"detail": "Internal server error", "request_id": request_id}),
+        media_type="application/json",
+        headers={"X-Request-ID": request_id},
+    )
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(web_router)
 
@@ -480,7 +509,10 @@ async def read_installation_settings(installation_id: int, request: Request):
     """Bir installation'ın Semgrep ayarlarını döndürür (yoksa varsayılan)."""
     from app.db import db_enabled
 
-    _verify_admin_token(request)
+    user = require_user(request)
+    allowed = {int(x) for x in user.get("installations", [])}
+    if installation_id not in allowed:
+        raise HTTPException(status_code=404, detail="Installation bulunamadı")
 
     if not db_enabled():
         raise HTTPException(status_code=503, detail="Veri katmanı devre dışı (DATABASE_URL yok)")
@@ -504,7 +536,10 @@ async def update_installation_settings(
     """
     from app.db import db_enabled
 
-    _verify_admin_token(request)
+    user = require_user(request)
+    allowed = {int(x) for x in user.get("installations", [])}
+    if installation_id not in allowed:
+        raise HTTPException(status_code=404, detail="Installation bulunamadı")
 
     if not db_enabled():
         raise HTTPException(status_code=503, detail="Veri katmanı devre dışı (DATABASE_URL yok)")
@@ -931,8 +966,9 @@ async def _run_pr_review(
 # -------------------------------------------------------------------
 
 @app.get("/metrics")
-async def metrics():
-    usage = get_detailed_metrics()
+async def metrics(request: Request):
+    user = require_user(request)
+    usage = get_detailed_metrics(user.get("installations", []))
     return {
         "parser_success_rate_pct": round(ParseStatistics.get_success_rate(), 1),
         "llm_cache": llm_response_cache.stats() if "llm_response_cache" in globals() else None,
