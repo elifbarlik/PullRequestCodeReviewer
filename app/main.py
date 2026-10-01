@@ -48,8 +48,8 @@ from app.github_security import (
     validate_installation_id,
     validate_webhook_event,
 )
-from app.repository import (
 from app.github_oauth import start_login, finish_login, require_user, current_user, logout
+from app.repository import (
     upsert_installation,
     ensure_installation,
     deactivate_installation,
