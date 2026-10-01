@@ -73,15 +73,24 @@ jobs:
                   except json.JSONDecodeError:
                       continue
                   message = str(outer.get("message") or outer.get("text") or "")
-                  if "SecPR-TR structured logging smoke test" not in message:
+                  target = "SecPR-TR structured logging smoke test"
+                  if target not in message and target not in str(outer):
                       continue
-                  try:
-                      inner = json.loads(message)
-                  except json.JSONDecodeError:
-                      continue
-                  if inner.get("message") == "SecPR-TR structured logging smoke test":
+
+                  # Flyctl versions/log drivers may expose the Python JSON log
+                  # either as a nested JSON string or as already-decoded fields.
+                  candidates = [outer]
+                  if message:
+                      try:
+                          decoded = json.loads(message)
+                          if isinstance(decoded, dict):
+                              candidates.append(decoded)
+                      except json.JSONDecodeError:
+                          pass
+
+                  if any(item.get("message") == target for item in candidates if isinstance(item, dict)):
                       found += 1
-                      print(inner)
+                      print(candidates[-1])
           assert found > 0, "structured log smoke record not found as nested JSON"
           print("structured-log-output: PASS")
           PY
