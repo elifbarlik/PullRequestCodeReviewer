@@ -61,6 +61,7 @@ from app.repository import (
     get_recent_review_runs,
     get_review_run_detail,
     get_installation_settings,
+    get_installation_details,
     set_installation_settings,
     get_detailed_metrics,
     check_rate_limit,
@@ -405,11 +406,14 @@ async def github_me(request: Request):
     user = current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="GitHub ile giriş gerekli")
+    installation_ids = [int(x) for x in user.get("installations", [])]
+    installation_details = get_installation_details(installation_ids)
     return {
         "id": user["sub"],
         "login": user["login"],
-        "installations": len(user.get("installations", [])),
-        "installation_ids": [int(x) for x in user.get("installations", [])],
+        "installations": len(installation_ids),
+        "installation_ids": installation_ids,
+        "installation_details": installation_details,
     }
 
 
