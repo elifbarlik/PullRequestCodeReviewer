@@ -495,7 +495,7 @@ async def local_review(request: Request, body: DiffRequest):
 
 # Faz 6: Semgrep tarama politikası semgrep_scanner.py'deki tek sözleşmeden
 # gelir; burada ayrı bir uzantı listesi tutulmaz.
-_MAX_SCAN_FILES = 60
+_MAX_SCAN_FILES = 60  # backward-compatible local alias; Phase 6 contract lives in semgrep_scanner
 
 
 def _run_semgrep_for_pr(
@@ -532,15 +532,19 @@ def _run_semgrep_for_pr(
     unsupported_count = plan["unsupported_count"]
 
     if not candidates:
-        # PR yalnızca desteklenmeyen/çıkarılmış dosyalardan oluşuyorsa
-        # "safe" demiyoruz; taramanın kapsamını kullanıcıya açıkça bildiriyoruz.
+        # PR yalnızca desteklenmeyen/çıkarılmış dosyalardan oluşuyorsa bu bir
+        # scanner arızası değildir; kapsam eksiktir ve sonuç "safe" olamaz.
         return {
-            "status": "unavailable",
-            "error": "Bu PR'de Semgrep tarafından desteklenen taranabilir dosya bulunamadı.",
-            "partial": unsupported_count > 0,
+            "status": "ok",
+            "findings": [],
+            "partial": True,
             "partial_reason": "unsupported_files" if unsupported_count else "no_scan_targets",
             "unsupported_count": unsupported_count,
             "removed_count": plan["removed_count"],
+            "message": (
+                "Semgrep kapsamına girebilen değişmiş dosya bulunamadı; "
+                "güvenlik taraması tam kapsamlı değildir."
+            ),
         }
 
     try:
