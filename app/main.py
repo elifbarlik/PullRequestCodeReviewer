@@ -1279,6 +1279,10 @@ def _format_review_comment(
                 comment += "### ⚠️ Güvenlik Taraması Yapılamadı\n"
                 comment += f"Bu PR için otomatik güvenlik taraması tamamlanamadı: {security['scan_error']}\n"
                 comment += "Lütfen değişiklikleri manuel olarak gözden geçirin.\n\n"
+            elif security.get("partial_scan") and not security.get("has_security_issues"):
+                comment += "### ⚠️ Kısmi Güvenlik Taraması\n"
+                comment += f"{security.get('partial_message', 'PR’nin tamamı taranmadı.')}\n"
+                comment += "Bu nedenle sonuç **tam güvenlik taraması** olarak yorumlanmamalıdır.\n\n"
             elif security.get("has_security_issues"):
                 total = len(security.get("vulnerabilities", []))
                 comment += "### 🚨 Güvenlik Bulguları (Semgrep + Gemini)\n"
