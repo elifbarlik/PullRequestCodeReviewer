@@ -384,8 +384,9 @@ async def github_me(request: Request):
 # -------------------------------------------------------------------
 
 @app.get("/stats")
-async def get_stats():
-    """JSON parser istatistikleri + (DB açıksa) kurulum/analiz sayaçları."""
+async def get_stats(request: Request):
+    """Parser stats + installation-scoped usage stats for the authenticated user."""
+    user = require_user(request)
     stats = {
         "parser": {
             "total_attempts": ParseStatistics.total_attempts,
@@ -394,7 +395,7 @@ async def get_stats():
             "success_rate": f"{ParseStatistics.get_success_rate():.1f}%",
         }
     }
-    db_summary = get_stats_summary()
+    db_summary = get_stats_summary(user.get("installations", []))
     if db_summary is not None:
         stats["usage"] = db_summary
     return stats
