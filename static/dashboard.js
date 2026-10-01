@@ -31,7 +31,7 @@ async function load(){
     set("low",summary.severity.low);
     $("auth-state").textContent="GitHub user session";
     $("reviews").innerHTML=recent.reviews.length ? recent.reviews.map(r=>`
-      <tr><td>${escapeHtml(r.repository)}</td><td>#${r.pr_number}</td>
+      <tr class="review-row" data-review-id="${r.id}" tabindex="0"><td>${escapeHtml(r.repository)}</td><td>#${r.pr_number}</td>
       <td><span class="badge ${escapeHtml(r.status)}">${escapeHtml(r.status)}</span></td>
       <td>${Number(r.files_scanned||0)}</td><td>${Number(r.findings_count||0)}</td></tr>`).join("") :
       '<tr><td colspan="5">Henüz review yok.</td></tr>';
