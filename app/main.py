@@ -48,6 +48,7 @@ from app.github_security import (
     validate_installation_id,
     validate_webhook_event,
 )
+from app.github_oauth import start_login, finish_login, require_user, current_user, logout
 from app.repository import (
     upsert_installation,
     ensure_installation,
@@ -56,6 +57,9 @@ from app.repository import (
     record_usage,
     record_findings,
     get_stats_summary,
+    get_dashboard_summary,
+    get_recent_review_runs,
+    get_review_run_detail,
     get_installation_settings,
     set_installation_settings,
     get_detailed_metrics,
@@ -304,6 +308,75 @@ async def health_check():
         "app": "SecPR-TR",
         "checks": checks,
     }
+
+
+# -------------------------------------------------------------------
+# Product dashboard API (Faz 10)
+# -------------------------------------------------------------------
+
+@app.get("/dashboard/api/summary")
+async def dashboard_summary(request: Request):
+    user = require_user(request)
+    result = get_dashboard_summary(user.get("installations", []))
+    if result is None:
+        raise HTTPException(status_code=503, detail="Dashboard veri katmanı kullanılamıyor")
+    return result
+
+
+@app.get("/dashboard/api/reviews")
+async def dashboard_reviews(request: Request, limit: int = 20):
+    user = require_user(request)
+    result = get_recent_review_runs(limit, user.get("installations", []))
+    if result is None:
+        raise HTTPException(status_code=503, detail="Dashboard veri katmanı kullanılamıyor")
+    return {"reviews": result}
+
+
+@app.get("/dashboard/api/reviews/{review_run_id}")
+async def dashboard_review_detail(review_run_id: int, request: Request):
+    user = require_user(request)
+    result = get_review_run_detail(review_run_id, user.get("installations", []))
+    if result is None:
+        raise HTTPException(status_code=404, detail="Review bulunamadı")
+    return result
+
+
+# -------------------------------------------------------------------
+# GitHub user authentication (Faz 11)
+# -------------------------------------------------------------------
+
+@app.get("/auth/github", include_in_schema=False)
+async def github_login(request: Request):
+    try:
+        return start_login(request)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.get("/auth/github/callback", include_in_schema=False)
+async def github_callback(request: Request, code: str = "", state: str = ""):
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="OAuth callback parametreleri eksik")
+    try:
+        return finish_login(request, code, state)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("GitHub OAuth callback failed")
+        raise HTTPException(status_code=502, detail="GitHub OAuth işlemi başarısız")
+
+
+@app.post("/auth/logout", include_in_schema=False)
+async def github_logout():
+    return logout()
+
+
+@app.get("/auth/me", include_in_schema=False)
+async def github_me(request: Request):
+    user = current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="GitHub ile giriş gerekli")
+    return {"id": user["sub"], "login": user["login"], "installations": len(user.get("installations", []))}
 
 
 # -------------------------------------------------------------------

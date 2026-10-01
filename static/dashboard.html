@@ -1,14 +1,19 @@
 <!doctype html>
 <html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SecPR-TR — Dashboard</title><link rel="stylesheet" href="/static/styles.css"></head>
-<body><header class="nav"><a class="brand" href="/">SecPR-TR</a><span class="status">● API</span></header>
-<main class="shell dashboard"><div class="page-head"><div><p class="eyebrow">OVERVIEW</p><h1>Review Dashboard</h1><p class="muted">Analiz altyapısının anlık özeti.</p></div><button id="refresh" class="button secondary">Yenile</button></div>
+<body><header class="nav"><a class="brand" href="/">SecPR-TR</a><span class="status" id="session-status">● Giriş kontrol ediliyor…</span></header>
+<main class="shell dashboard">
+<div class="page-head"><div><p class="eyebrow">PRODUCT OVERVIEW</p><h1>Review Dashboard</h1><p class="muted">PR güvenlik incelemelerinin gerçek ürün görünümü.</p></div><div class="actions"><a id="login" class="button primary" href="/auth/github" hidden>GitHub ile giriş yap</a><button id="logout" class="button secondary" hidden>Çıkış</button><button id="refresh" class="button secondary">Yenile</button></div></div>
 <section class="cards">
-<div class="card"><span>Toplam deneme</span><strong id="attempts">—</strong></div>
-<div class="card"><span>Başarılı parse</span><strong id="success">—</strong></div>
-<div class="card"><span>Başarı oranı</span><strong id="rate">—</strong></div>
-<div class="card"><span>Veri katmanı</span><strong id="db">—</strong></div>
+<div class="card"><span>Toplam review</span><strong id="total">—</strong></div>
+<div class="card"><span>Başarılı</span><strong id="successful">—</strong></div>
+<div class="card"><span>Başarısız</span><strong id="failed">—</strong></div>
+<div class="card"><span>Finding</span><strong id="findings">—</strong></div>
 </section>
-<section class="panel"><h2>Parser sağlığı</h2><div class="bar"><i id="bar"></i></div><div class="split"><span>Başarı oranı</span><b id="rate2">—</b></div></section>
-<p id="error" class="error"></p></main>
+<section class="panel"><h2>Finding dağılımı</h2><div class="severity"><span>Critical <b id="critical">0</b></span><span>High <b id="high">0</b></span><span>Medium <b id="medium">0</b></span><span>Low <b id="low">0</b></span></div></section>
+<section class="panel"><div class="panel-head"><h2>Son review'lar</h2><span id="auth-state" class="muted small">Admin token gerekli</span></div>
+<div class="table-wrap"><table><thead><tr><th>Repository</th><th>PR</th><th>Status</th><th>Files</th><th>Findings</th></tr></thead><tbody id="reviews"><tr><td colspan="5">Yükleniyor…</td></tr></tbody></table></div></section>
+<section id="detail" class="panel" hidden><div class="panel-head"><h2>Review detail</h2><button id="close-detail" class="button secondary">Kapat</button></div><div id="detail-content"></div></section>
+<p id="error" class="error"></p>
+</main>
 <script src="/static/dashboard.js"></script></body></html>
