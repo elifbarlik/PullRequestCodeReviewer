@@ -164,10 +164,23 @@ class GitHubAppClient:
         response = requests.post(url, headers=headers, timeout=10)
 
         if response.status_code != 201:
-            logger.error(f"Token alınamadı: {response.status_code} — {response.text}")
+            logger.error(
+                "GitHub installation token request failed: status=%s",
+                response.status_code,
+            )
             response.raise_for_status()
 
         data = response.json()
+
+        # GitHub may return the effective permission set for the installation
+        # token. Fail closed if the token is not usable for the review engine.
+        from app.github_security import validate_token_permissions
+        if not validate_token_permissions(data.get("permissions")):
+            raise RuntimeError(
+                "GitHub installation token does not expose the required "
+                "pull_requests=write, contents=read, metadata=read permissions"
+            )
+
         token = data["token"]
 
         # GitHub ISO 8601 döndürür, unix timestamp'e çevir

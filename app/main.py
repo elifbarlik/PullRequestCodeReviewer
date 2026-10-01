@@ -36,6 +36,11 @@ from app.diff_utils import parse_added_lines
 from app.db import init_db
 from app.web import router as web_router
 from app.cost_control import LLMUsageCollector, llm_response_cache
+from app.github_security import (
+    validate_delivery_id,
+    validate_installation_id,
+    validate_webhook_event,
+)
 from app.repository import (
     upsert_installation,
     ensure_installation,
@@ -907,13 +912,28 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
             raise HTTPException(status_code=403, detail="Invalid signature")
 
         payload = json.loads(body)
-        event_type = request.headers.get("X-GitHub-Event", "")
+        raw_event_type = request.headers.get("X-GitHub-Event", "")
+        try:
+            event_type = validate_webhook_event(raw_event_type)
+            delivery_id = validate_delivery_id(
+                request.headers.get("X-GitHub-Delivery", "")
+            )
+            installation_id = validate_installation_id(
+                payload.get("installation", {}).get("id"),
+                required=raw_event_type != "ping",
+            )
+        except ValueError as exc:
+            logger.warning("Rejected invalid GitHub webhook metadata: %s", exc)
+            raise HTTPException(status_code=400, detail="Invalid webhook metadata")
+
         action = payload.get("action", "")
-        delivery_id = request.headers.get("X-GitHub-Delivery", "")
+        logger.info(
+            "🔔 Webhook: event=%s action=%s delivery=%s",
+            event_type,
+            action,
+            delivery_id,
+        )
 
-        logger.info(f"🔔 Webhook: event={event_type} action={action} delivery={delivery_id}")
-
-        installation_id = payload.get("installation", {}).get("id")
         repository_data = payload.get("repository", {})
         repository_id = repository_data.get("id")
 

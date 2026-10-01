@@ -47,6 +47,11 @@ def spy_pr_handler(monkeypatch):
 
 
 def _post(client, event, payload, delivery="d-1"):
+    if event == "pull_request":
+        payload = {
+            **payload,
+            "installation": payload.get("installation", {"id": 100}),
+        }
     body = json.dumps(payload).encode()
     return client.post(
         "/webhook",
@@ -66,7 +71,9 @@ class TestWebhookPrEvent:
         assert r.status_code == 200          # FastAPI TestClient bg task'ları senkron koşturur
         assert r.json()["status"] == "accepted"
         # BackgroundTasks TestClient'ta response'tan sonra çalışır — çağrıldı mı?
-        assert spy_pr_handler == [("opened", {"action": "opened", "number": 1})]
+        assert spy_pr_handler[0][0] == "opened"
+        assert spy_pr_handler[0][1]["number"] == 1
+        assert spy_pr_handler[0][1]["installation"]["id"] == 100
 
     def test_pr_non_actionable_action_ignored(self, client, spy_pr_handler):
         r = _post(client, "pull_request", {"action": "labeled"})
@@ -115,3 +122,52 @@ class TestWebhookInstallationEvent:
                                            "installation": {"id": 1}}, delivery="i-1")
         assert r.json()["status"] == "ok"
         assert seen == ["created"]
+
+
+class TestWebhookSecurityMetadata:
+    def test_missing_delivery_id_is_rejected(self, client, spy_pr_handler):
+        body = json.dumps({
+            "action": "opened",
+            "installation": {"id": 100},
+        }).encode()
+        r = client.post(
+            "/webhook",
+            content=body,
+            headers={
+                "X-Hub-Signature-256": _sign(body),
+                "X-GitHub-Event": "pull_request",
+                "Content-Type": "application/json",
+            },
+        )
+        assert r.status_code == 400
+        assert spy_pr_handler == []
+
+    def test_missing_installation_id_is_rejected(self, client, spy_pr_handler):
+        body = json.dumps({"action": "opened"}).encode()
+        r = client.post(
+            "/webhook",
+            content=body,
+            headers={
+                "X-Hub-Signature-256": _sign(body),
+                "X-GitHub-Event": "pull_request",
+                "X-GitHub-Delivery": "missing-installation",
+                "Content-Type": "application/json",
+            },
+        )
+        assert r.status_code == 400
+        assert spy_pr_handler == []
+
+    def test_unsupported_event_is_rejected(self, client, spy_pr_handler):
+        body = json.dumps({"action": "opened"}).encode()
+        r = client.post(
+            "/webhook",
+            content=body,
+            headers={
+                "X-Hub-Signature-256": _sign(body),
+                "X-GitHub-Event": "push",
+                "X-GitHub-Delivery": "push-1",
+                "Content-Type": "application/json",
+            },
+        )
+        assert r.status_code == 400
+        assert spy_pr_handler == []
