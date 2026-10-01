@@ -652,6 +652,143 @@ def get_detailed_metrics() -> Optional[Dict[str, Any]]:
         return None
 
 
+
+# -------------------------------------------------------------------
+# Dashboard read helpers (Faz 10)
+# -------------------------------------------------------------------
+
+def get_dashboard_summary() -> Optional[Dict[str, Any]]:
+    """Return product-level review counters for the authenticated dashboard."""
+    if not db_enabled():
+        return None
+    try:
+        from sqlalchemy import func, select
+        from app.models import ReviewRun, Finding
+
+        with get_session() as session:
+            total = session.scalar(select(func.count()).select_from(ReviewRun)) or 0
+            successful = session.scalar(
+                select(func.count()).select_from(ReviewRun).where(ReviewRun.status == "completed")
+            ) or 0
+            failed = session.scalar(
+                select(func.count()).select_from(ReviewRun).where(ReviewRun.status == "failed")
+            ) or 0
+            findings = session.scalar(select(func.coalesce(func.sum(ReviewRun.findings_count), 0))) or 0
+
+            severity_rows = session.execute(
+                select(Finding.severity, func.count())
+                .group_by(Finding.severity)
+            ).all()
+
+        severity = {str(name): int(count) for name, count in severity_rows}
+        return {
+            "total_reviews": int(total),
+            "successful_reviews": int(successful),
+            "failed_reviews": int(failed),
+            "findings": int(findings),
+            "severity": {
+                "critical": severity.get("critical", 0),
+                "high": severity.get("high", 0),
+                "medium": severity.get("medium", 0),
+                "low": severity.get("low", 0),
+            },
+        }
+    except Exception as e:
+        logger.error(f"⚠️ get_dashboard_summary başarısız: {e}")
+        return None
+
+
+def get_recent_review_runs(limit: int = 20) -> Optional[List[Dict[str, Any]]]:
+    """Return recent review lifecycle rows for the dashboard."""
+    if not db_enabled():
+        return None
+    try:
+        from sqlalchemy import select
+        from app.models import ReviewRun, Repository
+
+        limit = max(1, min(int(limit), 50))
+        with get_session() as session:
+            rows = session.execute(
+                select(ReviewRun, Repository.full_name)
+                .join(Repository, Repository.id == ReviewRun.repository_id)
+                .order_by(ReviewRun.created_at.desc())
+                .limit(limit)
+            ).all()
+
+        return [
+            {
+                "id": row.ReviewRun.id,
+                "repository": row.full_name,
+                "pr_number": row.ReviewRun.pr_number,
+                "head_sha": row.ReviewRun.head_sha,
+                "status": row.ReviewRun.status,
+                "files_scanned": row.ReviewRun.files_scanned,
+                "findings_count": row.ReviewRun.findings_count or 0,
+                "error": row.ReviewRun.error,
+                "created_at": row.ReviewRun.created_at.isoformat() if row.ReviewRun.created_at else None,
+                "completed_at": row.ReviewRun.completed_at.isoformat() if row.ReviewRun.completed_at else None,
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        logger.error(f"⚠️ get_recent_review_runs başarısız: {e}")
+        return None
+
+
+def get_review_run_detail(review_run_id: int) -> Optional[Dict[str, Any]]:
+    """Return one review lifecycle record and its finding severity breakdown."""
+    if not db_enabled():
+        return None
+    try:
+        from sqlalchemy import func, select
+        from app.models import ReviewRun, Repository, Finding, UsageLog
+
+        with get_session() as session:
+            row = session.execute(
+                select(ReviewRun, Repository.full_name)
+                .join(Repository, Repository.id == ReviewRun.repository_id)
+                .where(ReviewRun.id == review_run_id)
+            ).first()
+            if row is None:
+                return None
+
+            usage = session.scalar(
+                select(UsageLog).where(
+                    UsageLog.installation_id == row.ReviewRun.installation_id,
+                    UsageLog.pr_number == row.ReviewRun.pr_number,
+                    UsageLog.owner == row.full_name.split("/", 1)[0],
+                    UsageLog.repo == row.full_name.split("/", 1)[1],
+                ).order_by(UsageLog.created_at.desc())
+            )
+            severity_rows = session.execute(
+                select(Finding.severity, func.count())
+                .where(Finding.usage_log_id == usage.id if usage else False)
+                .group_by(Finding.severity)
+            ).all()
+
+        severity = {str(name): int(count) for name, count in severity_rows}
+        return {
+            "id": row.ReviewRun.id,
+            "repository": row.full_name,
+            "pr_number": row.ReviewRun.pr_number,
+            "head_sha": row.ReviewRun.head_sha,
+            "status": row.ReviewRun.status,
+            "files_scanned": row.ReviewRun.files_scanned or 0,
+            "findings_count": row.ReviewRun.findings_count or 0,
+            "error": row.ReviewRun.error,
+            "created_at": row.ReviewRun.created_at.isoformat() if row.ReviewRun.created_at else None,
+            "completed_at": row.ReviewRun.completed_at.isoformat() if row.ReviewRun.completed_at else None,
+            "severity": {
+                "critical": severity.get("critical", 0),
+                "high": severity.get("high", 0),
+                "medium": severity.get("medium", 0),
+                "low": severity.get("low", 0),
+            },
+        }
+    except Exception as e:
+        logger.error(f"⚠️ get_review_run_detail başarısız: {e}")
+        return None
+
 # -------------------------------------------------------------------
 # /stats için okuma yardımcıları
 # -------------------------------------------------------------------
