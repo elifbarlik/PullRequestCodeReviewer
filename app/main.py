@@ -361,7 +361,7 @@ async def github_callback(request: Request, code: str = "", state: str = ""):
         return finish_login(request, code, state)
     except HTTPException:
         raise
-    except requests.RequestException:
+    except Exception:
         logger.exception("GitHub OAuth callback failed")
         raise HTTPException(status_code=502, detail="GitHub OAuth işlemi başarısız")
 
