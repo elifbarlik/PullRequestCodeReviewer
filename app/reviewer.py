@@ -439,13 +439,28 @@ def build_security_result(security_scan: Optional[Dict[str, Any]], diff_text: st
     status = security_scan.get("status") if security_scan else "unavailable"
 
     if status == "ok":
-        return explain_security_findings(security_scan.get("findings") or [], diff_text, usage=usage)
+        result = explain_security_findings(
+            security_scan.get("findings") or [], diff_text, usage=usage
+        )
+        if security_scan.get("partial"):
+            # Kısmi tarama hiçbir zaman "safe" anlamına gelmez.
+            if not result.get("vulnerabilities"):
+                result["security_level"] = "unknown"
+            result["partial_scan"] = True
+            result["partial_message"] = security_scan.get(
+                "message",
+                "PR'nin tamamı güvenlik taramasına dahil edilmedi.",
+            )
+            result["partial_reason"] = security_scan.get("partial_reason")
+        return result
 
     return {
         "vulnerabilities": [],
         "has_security_issues": False,
         "security_level": "unknown",
         "scan_error": security_scan.get("error", "Güvenlik taraması yapılamadı") if security_scan else "Güvenlik taraması yapılamadı",
+        "partial_scan": bool(security_scan and security_scan.get("partial")),
+        "partial_reason": security_scan.get("partial_reason") if security_scan else None,
     }
 
 
