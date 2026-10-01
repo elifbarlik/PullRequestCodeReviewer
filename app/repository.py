@@ -464,6 +464,36 @@ def get_installation_settings(installation_id: int) -> Dict[str, Any]:
         return dict(DEFAULT_INSTALLATION_SETTINGS)
 
 
+def get_installation_details(installation_ids: Optional[List[int]] = None) -> Dict[str, Dict[str, Any]]:
+    """Return display metadata for installations visible to the authenticated user."""
+    if not installation_ids:
+        return {}
+    if not db_enabled():
+        return {}
+
+    try:
+        from sqlalchemy import select
+        from app.models import Installation
+
+        ids = [int(x) for x in installation_ids]
+        with get_session() as session:
+            rows = session.scalars(
+                select(Installation).where(Installation.id.in_(ids))
+            ).all()
+
+        return {
+            str(row.id): {
+                "id": int(row.id),
+                "login": row.account_login or f"Installation {row.id}",
+                "type": row.account_type or "unknown",
+            }
+            for row in rows
+        }
+    except Exception as e:
+        logger.error(f"⚠️ get_installation_details başarısız: {e}")
+        return {}
+
+
 def set_installation_settings(
     installation_id: int,
     enabled: Optional[bool] = None,
