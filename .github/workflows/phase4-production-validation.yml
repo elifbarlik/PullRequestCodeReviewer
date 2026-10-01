@@ -61,25 +61,25 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           set -euo pipefail
-          sleep 2
-          flyctl logs -a "$FLY_APP" --no-tail --json > fly-production-logs.jsonl
-          python - <<'PY'
+          found=0
+          for attempt in $(seq 1 6); do
+            echo "Capturing production logs (attempt $attempt/6)..."
+            flyctl logs -a "$FLY_APP" --no-tail --json > fly-production-logs.jsonl
+
+            if python - <<'PY'
           import json
-          found = 0
+          target = "SecPR-TR structured logging smoke test"
           with open("fly-production-logs.jsonl", encoding="utf-8") as f:
               for raw in f:
                   try:
                       outer = json.loads(raw)
                   except json.JSONDecodeError:
                       continue
-                  message = str(outer.get("message") or outer.get("text") or "")
-                  target = "SecPR-TR structured logging smoke test"
-                  if target not in message and target not in str(outer):
-                      continue
 
-                  # Flyctl versions/log drivers may expose the Python JSON log
-                  # either as a nested JSON string or as already-decoded fields.
+                  # Fly may expose the application record as nested JSON in
+                  # message/text, or as already-decoded structured fields.
                   candidates = [outer]
+                  message = str(outer.get("message") or outer.get("text") or "")
                   if message:
                       try:
                           decoded = json.loads(message)
@@ -88,13 +88,23 @@ jobs:
                       except json.JSONDecodeError:
                           pass
 
-                  if any(item.get("message") == target for item in candidates if isinstance(item, dict)):
-                      found += 1
-                      print(candidates[-1])
-          assert found > 0, "structured log smoke record not found as nested JSON"
-          print("structured-log-output: PASS")
+                  for item in candidates:
+                      if isinstance(item, dict) and item.get("message") == target:
+                          print(item)
+                          print("structured-log-output: PASS")
+                          raise SystemExit(0)
+          raise SystemExit("structured log smoke record not found in current log window")
           PY
+            then
+              found=1
+              break
+            fi
 
+            echo "Structured log not visible yet; waiting 5s..."
+            sleep 5
+          done
+
+          test "$found" = "1"
       - name: Trigger Sentry smoke test when configured
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
