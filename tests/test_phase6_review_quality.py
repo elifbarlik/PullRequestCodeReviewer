@@ -3,6 +3,7 @@ import pytest
 from app.semgrep_scanner import (
     DEFAULT_SEMGREP_CONFIGS,
     MAX_DIFF_BYTES,
+    MAX_SCAN_FILE_BYTES,
     MAX_SCAN_FILES,
     SUPPORTED_FILE_EXTENSIONS,
     build_scan_plan,
@@ -124,3 +125,35 @@ def test_phase6_unsupported_only_pr_is_partial_not_safe(monkeypatch):
     assert result["findings"] == []
     assert result["partial"] is True
     assert result["partial_reason"] == "unsupported_files"
+
+
+def test_phase6_oversized_file_is_partial_not_safe(monkeypatch):
+    seen = {}
+
+    def fake_scan(files, diff_text, configs=None):
+        seen["files"] = files
+        return []
+
+    monkeypatch.setattr("app.main.scan_diff", fake_scan)
+    client = _FakeClient()
+    monkeypatch.setattr(
+        client,
+        "get_files_content",
+        lambda owner, repo, filenames, ref: {
+            "large.py": "x" * (MAX_SCAN_FILE_BYTES + 1),
+            "small.py": "x = 1\\n",
+        },
+    )
+    result = _run_semgrep_for_pr(
+        client, "o", "r", 1, "diff", "sha",
+        [
+            {"filename": "large.py", "status": "modified"},
+            {"filename": "small.py", "status": "modified"},
+        ],
+    )
+
+    assert "large.py" not in seen["files"]
+    assert "small.py" in seen["files"]
+    assert result["partial"] is True
+    assert result["oversized_count"] == 1
+    assert "file_size_limit" in result["partial_reason"]
