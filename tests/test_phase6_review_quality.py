@@ -104,10 +104,10 @@ def test_phase6_diff_size_limit_skips_semgrep(monkeypatch):
         return []
 
     monkeypatch.setattr("app.main.scan_diff", fake_scan)
-    result = __import__("asyncio").run(_run_semgrep_for_pr(
+    result = _run_semgrep_for_pr(
         _FakeClient(), "o", "r", 1, "x" * (MAX_DIFF_BYTES + 1), "sha",
         [{"filename": "app.py", "status": "modified"}],
-    ))
+    )
 
     assert result["status"] == "unavailable"
     assert result["partial_reason"] == "diff_size_limit"
@@ -115,10 +115,10 @@ def test_phase6_diff_size_limit_skips_semgrep(monkeypatch):
 
 
 def test_phase6_unsupported_only_pr_is_partial_not_safe(monkeypatch):
-    result = __import__("asyncio").run(_run_semgrep_for_pr(
+    result = _run_semgrep_for_pr(
         _FakeClient(), "o", "r", 1, "diff", "sha",
         [{"filename": "README.md", "status": "modified"}],
-    ))
+    )
 
     assert result["status"] == "ok"
     assert result["findings"] == []
