@@ -18,6 +18,7 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           set -euo pipefail
+          healthy=false
           for i in $(seq 1 30); do
             if curl -fsS "https://${FLY_APP}.fly.dev/health" >/tmp/health.json; then
               cat /tmp/health.json
@@ -26,12 +27,14 @@ jobs:
           data = json.load(open(sys.argv[1], encoding="utf-8"))
           assert data["status"] == "ok", data
           PY
+              healthy=true
               echo "production-health: PASS"
               break
             fi
             echo "Waiting for production deployment... attempt $i/30"
             sleep 5
           done
+          test "$healthy" = "true"
 
       - name: Verify production LOG_FORMAT
         env:
@@ -48,9 +51,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Subscribe to the live Fly log stream BEFORE emitting the smoke
-          # record. --no-tail only reads the current log buffer and can miss
-          # a record emitted immediately before the snapshot is requested.
+          # Subscribe before emitting the record, then allow up to 30 seconds
+          # for the log stream to deliver it.
           flyctl logs -a "$FLY_APP" --json > fly-production-logs.jsonl &
           logs_pid=$!
 
@@ -60,7 +62,7 @@ jobs:
           }
           trap cleanup EXIT
 
-          sleep 2
+          sleep 3
 
           result="$(flyctl ssh console -a "$FLY_APP" -q -C 'python -c "import os,urllib.request; r=urllib.request.Request(\"http://127.0.0.1:8000/admin/logging-test\",method=\"POST\",headers={\"X-Admin-Token\":os.environ[\"ADMIN_SECRET\"]}); print(urllib.request.urlopen(r,timeout=10).read().decode())"')"
           echo "$result"
@@ -68,42 +70,74 @@ jobs:
           import json, sys
           data = json.loads(sys.argv[1])
           assert data["status"] == "logged", data
+          assert data["event"] == "structured-log-smoke-test", data
           print("structured-log-endpoint: PASS")
           PY
 
-          sleep 3
-          cleanup
-          trap - EXIT
-
-          python - <<'PY'
+          found=false
+          for i in $(seq 1 15); do
+            if python - <<'PY'
           import json
-          target = "SecPR-TR structured logging smoke test"
 
-          with open("fly-production-logs.jsonl", encoding="utf-8") as f:
-              for raw in f:
+          target = "SecPR-TR structured logging smoke test"
+          found = False
+
+          try:
+              stream = open("fly-production-logs.jsonl", encoding="utf-8")
+          except FileNotFoundError:
+              raise SystemExit(1)
+
+          with stream:
+              for raw in stream:
                   try:
                       outer = json.loads(raw)
                   except json.JSONDecodeError:
                       continue
 
                   candidates = [outer]
-                  message = str(outer.get("message") or outer.get("text") or "")
-                  if message:
-                      try:
-                          decoded = json.loads(message)
-                          if isinstance(decoded, dict):
-                              candidates.append(decoded)
-                      except json.JSONDecodeError:
-                          pass
+                  for key in ("message", "text"):
+                      nested = outer.get(key)
+                      if isinstance(nested, str):
+                          try:
+                              decoded = json.loads(nested)
+                              if isinstance(decoded, dict):
+                                  candidates.append(decoded)
+                          except json.JSONDecodeError:
+                              pass
 
                   for item in candidates:
-                      if isinstance(item, dict) and item.get("message") == target:
+                      if not isinstance(item, dict):
+                          continue
+                      message = item.get("message") or item.get("msg")
+                      if (
+                          message == target
+                          and item.get("secpr_smoke_test") is True
+                      ):
                           print(item)
                           print("structured-log-output: PASS")
-                          raise SystemExit(0)
+                          found = True
+                          break
+                  if found:
+                      break
 
-          raise SystemExit("structured log smoke record not found in live log stream")
+          raise SystemExit(0 if found else 1)
           PY
+            then
+              found=true
+              break
+            fi
+            sleep 2
+          done
+
+          cleanup
+          trap - EXIT
+          if [ "$found" != "true" ]; then
+            echo "structured log smoke record not found in live log stream"
+            echo "--- captured log stream ---"
+            cat fly-production-logs.jsonl || true
+            exit 1
+          fi
+
       - name: Trigger Sentry smoke test when configured
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -133,4 +167,4 @@ jobs:
         with:
           name: phase4-production-logs
           path: fly-production-logs.jsonl
-          if-no-files-found: error
+          if-no-files-found: warn
