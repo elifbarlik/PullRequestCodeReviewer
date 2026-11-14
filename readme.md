@@ -1,219 +1,175 @@
 # SecPR-TR
 
-**Türkçe, güvenlik odaklı pull request incelemesi yapan bir GitHub App.**
+**An AI-assisted GitHub Pull Request reviewer with a security-first workflow and Turkish-language feedback.**
 
-Bir PR açıldığında veya güncellendiğinde otomatik devreye girer, değişen kodu
-güvenlik açıkları için tarar ve her bulguyu junior geliştiricinin anlayacağı
-**Türkçe, öğretici** bir yorumla **ilgili kod satırına** iliştirir; genel bir
-özet de PR'e review olarak eklenir.
+SecPR-TR is a GitHub App that reviews pull requests, scans changed code with Semgrep, and uses Google's Gemini models to summarize changes and explain security findings. Review feedback is posted back to GitHub, including inline comments when a finding can be mapped to an added line.
 
-## Neden var?
+> **Project status:** Portfolio project. The hosted demo is not guaranteed to remain available. Run the application locally to explore it. SecPR-TR is an assistive tool, not a substitute for human code review or a professional security audit.
 
-AI destekli PR review pazarı kalabalık (CodeRabbit, GitHub Copilot code review,
-Greptile...) ama hepsi İngilizce çıktı verir ve genel amaçlıdır. SecPR-TR dar bir
-boşluğa oturur: **Türkiye'deki takımlar ve junior geliştiriciler için ana dilde,
-güvenlik odaklı** inceleme.
+## What it does
 
-## Hibrit mimari — neden salt-LLM değil?
+- **GitHub App integration:** Receives pull-request and installation webhooks and uses GitHub App JWTs with installation-scoped access tokens.
+- **Security scanning:** Runs Semgrep against supported changed files and filters findings to lines added or changed in the pull request.
+- **AI-assisted explanations:** Uses Gemini for pull-request summaries and Turkish explanations of detected security findings. Semgrep is the detection layer; Gemini explains findings rather than acting as the sole vulnerability detector.
+- **Inline feedback:** Posts findings as inline pull-request review comments where GitHub accepts the diff position. Findings that cannot be placed inline are included in the summary review.
+- **Dashboard and persistence:** Includes a dashboard with review history and detail views, GitHub OAuth sign-in, and PostgreSQL-backed installation/review metadata.
+- **Security controls:** Includes webhook HMAC-SHA256 verification, OAuth state validation, signed HttpOnly session cookies, installation-scoped access, and request rate limiting.
+- **Operational visibility and cost controls:** Includes health and metrics endpoints, structured logging, optional Sentry integration, bounded LLM caching, and output-token limits.
 
-Sadece LLM'e "bu diff'te güvenlik açığı var mı?" diye sormak, false positive ve
-false negative riski taşır. SecPR-TR bunun yerine işi ikiye böler:
+## How a review works
 
-1. **Semgrep** (deterministik statik analiz) diff'te *değişen satırlarda*
-   bilinen açık pattern'lerini bulur — SQL injection, hardcoded secret, path
-   traversal, SSRF, komut enjeksiyonu vb. Bulgunun *var olup olmadığına* ve
-   *önem derecesine* Semgrep karar verir.
-2. **Gemini** (google-genai) bu bulguları **açıklar** — açık aramaz.
-   Her bulgu için: neden risk, somut olarak nasıl istismar edilir, nasıl
-   düzeltilir (kod örneğiyle). Türkçe ve öğretici tonda.
+```text
+GitHub Pull Request event
+        |
+        v
+FastAPI webhook endpoint
+        |
+        +--> Verify webhook signature and delivery metadata
+        |
+        v
+GitHub App installation token
+        |
+        +-------------------------+
+        |                         |
+        v                         v
+   Semgrep scan             Gemini summary
+   (changed code)           (PR context)
+        |                         |
+        +------------+------------+
+                     |
+                     v
+        Gemini explains Semgrep findings
+                     |
+                     v
+     GitHub review: summary + inline comments
+                     |
+                     v
+       PostgreSQL metadata (when configured)
+```
 
-Gemini çağrısı başarısız olsa bile gerçek Semgrep bulguları asla kaybolmaz —
-ham Semgrep mesajıyla raporlanır. Semgrep hiç çalışamazsa (CLI yok, ağ yok, API
-hatası) sonuç **asla "güvenli" denmez**; şeffaf bir "tarama yapılamadı" uyarısı
-verilir.
+The security pipeline deliberately separates **detection** from **explanation**. If Semgrep is unavailable or a scan cannot be completed, the application reports that the scan was unavailable instead of presenting the result as a clean security scan.
 
-## Hız (Faz 4.4)
+## Technology stack
 
-PR açma → yorum süresini minimize etmek için:
+| Area | Technologies |
+|---|---|
+| Backend | Python 3.11, FastAPI, Uvicorn |
+| GitHub integration | GitHub Apps, Webhooks, GitHub REST API, PyJWT |
+| Security analysis | Semgrep |
+| AI | Google Gemini API (`google-genai`) |
+| Data layer | PostgreSQL, SQLAlchemy, Alembic |
+| Dashboard | HTML, CSS, JavaScript |
+| Authentication | GitHub OAuth, signed session cookies |
+| Operations | Docker, Docker Compose, structured logging, Sentry |
+| Testing | pytest, SQLite in-memory tests, Semgrep benchmark suite |
 
-- **Paralel GitHub çağrıları:** `get_pr_bundle` diff + PR detay + dosya listesini
-  tek seferde (`ThreadPoolExecutor`), `get_files_content` dosya içeriklerini
-  paralel çeker (N seri round-trip → ~1)
-- **Semgrep ∥ LLM özeti:** `short_summary` Semgrep sonucuna bağımlı değil; ikisi
-  aynı anda çalışır, toplam süre ~`max(semgrep, özet)`
-- **Ruleset ön-cache:** tüm izinli Semgrep ruleset'leri Docker image build'inde
-  indirilir — ilk PR'de indirme yok (`Dockerfile`)
-- **Arka plan analiz:** webhook imzayı doğrular, `202` döner, analizi
-  `BackgroundTasks`'te yürütür — GitHub'ın 10 sn timeout'una takılmaz;
-  `X-GitHub-Delivery` LRU'su retry kaynaklı mükerrer analizi engeller
-- **İçeriğe göre timeout:** ≤ 12 dosya → 45 sn, fazlası → 120 sn; `--jobs` ile
-  çok çekirdek, `--max-target-bytes 1MB` ile dev dosyalar atlanır
-- **Dosya tavanı:** > 60 taranabilir dosya varsa Semgrep ilk 60 ile sınırlanır,
-  kalanı özet yoruma "boyut sınırı" notuyla düşer
+## Run locally
 
-Yanıt gövdesindeki `timing_ms` (total / github / semgrep_and_summary /
-gemini_detail) ve log satırları darboğazı gösterir.
+### Requirements
 
-## Mimari bileşenler
+- Docker and Docker Compose
+- A GitHub App for webhook and repository access
+- A Google Gemini API key
 
-| Modül | Sorumluluk |
-|-------|-----------|
-| `app/semgrep_scanner.py` | Semgrep'i çalıştırır, bulguları PR'de gerçekten değişen satırlarla sınırlar (`diff_utils.parse_added_lines`); içeriğe göre timeout, `--jobs`, `--max-target-bytes` |
-| `app/reviewer.py` | Semgrep bulgularını Türkçe açıklamaya çevirir (`explain_security_findings`); `security_scan` verilmezse eski LLM-only `SECURITY_REVIEW`'a düşer; iki aşamalı analiz (özet → detay); `precomputed_summary` ile özet dışarıdan paralel verilebilir; token/diff kırpma |
-| `app/main.py` → `_build_inline_comments` | Her bulguyu, satırı diff'te varsa GitHub review API'sinin inline yorumuna çevirir; yerleştirilemeyenler özet yoruma düşer. `create_review` tek istekte özet + tüm inline yorumları gönderir; `synchronize`'da `_INLINE_MARKER` ile mükerrer yorum atlanır |
-| `app/main.py` → `/webhook` | İmza doğrula → `X-GitHub-Delivery` mükerrer kontrolü → `pull_request` analizini `BackgroundTasks`'e ver, `202` dön |
-| `app/json_parser.py` | LLM yanıtını 5 katmanlı fallback ile parse eder (direkt JSON → markdown blok → yaygın hata düzeltme → regex → şablon) |
-| `app/github_client.py` | GitHub App kimlik doğrulama: RS256 JWT → installation access token (PAT yok); `get_pr_bundle` / `get_files_content` paralel çekim; `create_review` batch inline yorum |
-| `app/prompts.py` | Türkçe, junior-dostu prompt şablonları (`SECURITY_EXPLAIN`, `SHORT_SUMMARY`, ...) |
-| `app/db.py` / `app/models.py` / `app/repository.py` | Çok kiracılı veri katmanı: kurulum kayıtları, kullanım logları, güvenlik bulguları (Faz 2b) |
-| `app/main.py` | FastAPI uygulaması + webhook event yönlendirmesi |
-
-## Veri katmanı (Faz 2b)
-
-`DATABASE_URL` tanımlıysa şu tablolar tutulur:
-
-- **`installations`** — her GitHub App kurulumu (`installation_id` → hesap/org, `is_active` soft-delete)
-- **`usage_logs`** — her PR analizi (`installation_id`, diff boyutu, Semgrep durumu, bulgu sayısı, süre — Gemini maliyet kalibrasyonu için)
-- **`findings`** — her güvenlik bulgusu (ileride false-positive oranı metriği için)
-- **`settings`** — installation bazlı ayarlar: taramanın açık/kapalı olması ve hangi Semgrep ruleset'lerinin çalışacağı (Faz 2c)
-
-### Installation ayarları (Faz 2c)
-
-Her installation için güvenlik taramasını kapatabilir veya çalışacak Semgrep
-ruleset'lerini seçebilirsiniz. Henüz dashboard yok (Faz 5); ayarlar iki endpoint
-ile yönetilir:
+### 1. Configure environment
 
 ```bash
-# Oku (ayar yoksa varsayılan: enabled=true, semgrep_configs=null → p/security-audit + p/secrets)
-curl http://localhost:8000/installations/12345678/settings
-
-# Taramayı kapat
-curl -X PUT http://localhost:8000/installations/12345678/settings \
-  -H "Content-Type: application/json" -d '{"enabled": false}'
-
-# Belirli ruleset'ler (yalnızca izinli olanlar; geçersizler elenir)
-curl -X PUT http://localhost:8000/installations/12345678/settings \
-  -H "Content-Type: application/json" -d '{"semgrep_configs": ["p/python", "p/secrets"]}'
-
-# Varsayılan ruleset'e dön
-curl -X PUT http://localhost:8000/installations/12345678/settings \
-  -H "Content-Type: application/json" -d '{"reset_configs": true}'
+cp .env.example .env
 ```
 
-İzinli ruleset'ler `semgrep_scanner.ALLOWED_SEMGREP_CONFIGS` içinde tanımlıdır
-(keyfi dosya yolu / URL kabul edilmez — komut enjeksiyonu / SSRF yüzeyi).
-`DATABASE_URL` yoksa bu endpoint'ler `503` döner; tarama her installation için
-varsayılan ayarla çalışır.
+Fill in the required values in `.env`:
 
-**`DATABASE_URL` boşsa veri katmanı tamamen devre dışı kalır** ve uygulama
-(webhook analizi, `/local-review`, testler) DB olmadan çalışır. DB geçici olarak
-düşse bile PR yorumu gönderilmeye devam eder — loglama hataları yutulur.
+- `GEMINI_API_KEY`
+- `GITHUB_APP_ID`
+- `GITHUB_APP_PRIVATE_KEY_PATH` or `GITHUB_APP_PRIVATE_KEY`
+- `GITHUB_WEBHOOK_SECRET`
+- `ADMIN_SECRET`
 
-## Kurulum
+The Docker Compose setup provides PostgreSQL. The `GITHUB_OAUTH_*` variables are needed when you want to use the authenticated dashboard. Set `GITHUB_OAUTH_REDIRECT_URI` to your registered callback URL when it differs from the automatically derived `/auth/github/callback` URL.
 
-### 1. GitHub App kaydı
-
-GitHub → Settings → Developer settings → GitHub Apps → New GitHub App:
-
-- **Webhook URL**: `https://<alan-adınız>/webhook`
-- **Webhook secret**: rastgele bir değer (`python -c "import secrets; print(secrets.token_hex(32))"`)
-- **İzinler** (minimum): Pull requests → Read & write, Contents → Read-only
-- **Events**: Pull request, Installation, Installation repositories
-- Private key üret ve `.pem` dosyasını indir
-
-### 2. Ortam değişkenleri
-
-`.env.example`'ı `.env` olarak kopyalayıp doldurun:
-
-```
-GEMINI_API_KEY=...
-GITHUB_APP_ID=...
-GITHUB_APP_PRIVATE_KEY_PATH=/path/to/app.pem      # veya GITHUB_APP_PRIVATE_KEY (tek satır)
-GITHUB_WEBHOOK_SECRET=...
-DATABASE_URL=                                      # boş → DB devre dışı; compose otomatik doldurur
-```
-
-### 3. Çalıştırma — Docker Compose (önerilen)
+### 2. Start the application
 
 ```bash
-docker-compose up -d          # uygulama + PostgreSQL
-docker-compose logs -f pr-reviewer
+docker compose up --build -d
+docker compose logs -f pr-reviewer
 ```
 
-`http://localhost:8000` üzerinde çalışır. Postgres otomatik ayağa kalkar ve
-tablolar açılışta oluşturulur.
+The application is available at `http://localhost:8000`.
 
-### 4. Yerel geliştirme
+### 3. Configure GitHub webhooks
+
+For a deployed or tunneled local instance, set the GitHub App webhook URL to:
+
+```text
+https://<your-host>/webhook
+```
+
+Enable the `Pull request`, `Installation`, and `Installation repositories` events. Grant the app the minimum permissions documented in your GitHub App configuration: Pull requests (read/write) and Contents (read-only), plus GitHub's required Metadata permission.
+
+For local webhook testing, the repository includes `scripts/smee_proxy.py`.
+
+### 4. Stop the application
+
+```bash
+docker compose down
+```
+
+Add `-v` only when you intentionally want to remove the local PostgreSQL volume and its data.
+
+## Useful endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /health` | Application and dependency health |
+| `GET /stats` | Parser and usage statistics |
+| `POST /webhook` | GitHub App webhook receiver |
+| `POST /local-review` | Submit a diff for a local review |
+| `GET /dashboard` | Review dashboard |
+| `GET /dashboard/api/summary` | Dashboard summary |
+| `GET /dashboard/api/reviews` | Review history |
+| `GET /installations/{id}/settings` | Read installation scan settings |
+| `PUT /installations/{id}/settings` | Update installation scan settings |
+
+The `/local-review` endpoint accepts a diff directly and does not run the full Semgrep file-content workflow. Use the GitHub App webhook path when evaluating the normal changed-file security scan.
+
+## Tests
+
+Run the automated test suite:
 
 ```bash
 pip install -r requirements.txt
-uvicorn app.main:app --reload
-```
-
-Webhook'ları yerelde test etmek için:
-
-```bash
-python scripts/smee_proxy.py https://smee.io/<kanalınız>   # webhook tüneli
-python scripts/get_installation_id.py                       # kurulu installation'ları listele
-```
-
-## API Endpoint'leri
-
-| Endpoint | Açıklama |
-|----------|----------|
-| `GET /health` | Sağlık kontrolü |
-| `POST /webhook` | GitHub App webhook alıcısı — imza zorunlu; `pull_request` analizi arka plana atılıp hemen `202` döner (GitHub 10 sn timeout'una takılmaz), `X-GitHub-Delivery` ile mükerrer retry atlanır |
-| `POST /local-review` | Diff'i doğrudan gönderip analiz ettirme — Semgrep çalıştırılamaz (gerçek dosya erişimi yok), LLM-only güvenlik incelemesine düşer |
-| `GET /stats` | JSON parser başarı oranı + (DB açıksa) kurulum/analiz sayaçları |
-| `GET/PUT /installations/{id}/settings` | Installation bazlı Semgrep ayarları (Faz 2c) — DB açıksa |
-
-```bash
-curl -X POST http://localhost:8000/local-review \
-  -H "Content-Type: application/json" \
-  -d '{"diff_text": "--- a/x.py\n+++ b/x.py\n...", "review_types": ["short_summary", "security"]}'
-```
-
-## Test
-
-```bash
+pip install -r requirements-dev.txt
 pytest tests/ -v
 ```
 
-95 test fonksiyonu. Ağ erişimi yoksa (gerçek Gemini çağrısı) veya `semgrep` CLI
-kurulu değilse ilgili testler otomatik atlanır — bkz. `tests/conftest.py`
-marker'ları (`network`, `requires_semgrep`). Veri katmanı testleri SQLite
-in-memory kullanır, Postgres gerektirmez.
+Tests that require external credentials, network access, or an installed Semgrep CLI may be skipped according to the test markers and environment. A successful local test run does not establish that the hosted production deployment is healthy.
+
+## Security benchmark
+
+The repository contains a small, reproducible benchmark for the deterministic Semgrep scanning layer:
 
 ```bash
-pytest tests/ --cov=app --cov-report=html
+python scripts/run_benchmark.py
 ```
 
-## Benchmark (Faz 4.2)
+The last committed result covers 28 curated scenarios (20 vulnerable and 8 clean): **52.4% recall, 100.0% precision, and 68.8% F1**. These figures apply only to the benchmark cases and Semgrep detection layer; they are not a claim of real-world vulnerability-detection accuracy. See [benchmark methodology](benchmarks/README.md) and [recorded results](benchmarks/RESULTS.md).
 
-Deterministik tarama katmanının (`scan_diff` = Semgrep + diff-satır filtresi)
-**recall / precision / süre** ölçümü:
+## Known limitations
 
-```bash
-python scripts/run_benchmark.py         # benchmarks/RESULTS.md güncellenir
-```
+- Semgrep coverage depends on the configured community rulesets and supported file types. A missing finding does not prove that code is secure.
+- The benchmark is intentionally limited and does not represent the distribution of vulnerabilities in production repositories.
+- Gemini explanations may be incomplete or incorrect and must be reviewed by a developer.
+- PR analysis uses the application's background-task and persistence design; it is not a guarantee of durable, exactly-once job execution across every infrastructure failure.
+- A live hosted endpoint and third-party API availability are not guaranteed.
 
-`benchmarks/cases/` altında 28 senaryo (20 açıklı: SQLi, hardcoded secret,
-komut enjeksiyonu, path traversal, SSRF, zayıf kripto, `eval`, `pickle`,
-`yaml.load`, XXE, JWT/TLS misconfig, XSS, ...; 8 temiz: false positive
-ölçümü için). Güncel sonuç ve yöntem: [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md),
-sınırlar: [`benchmarks/README.md`](benchmarks/README.md).
+## Project documentation
 
-> OSS Semgrep ruleset kapsamı sınırlı — bazı sınıflar (ör. `os.system` concat,
-> `tempfile.mktemp`, `assert`-tabanlı yetki, lxml XXE) Pro rules olmadan
-> yakalanmıyor. Benchmark bunu **ölçüyor ve dürüstçe raporluyor**; abartılı
-> bir recall iddiası yok.
+- [Privacy policy](PRIVACY.md)
+- [Support and issue reporting](SUPPORT.md)
+- [MIT License](LICENSE)
+- [Benchmark methodology](benchmarks/README.md)
+- [Benchmark results](benchmarks/RESULTS.md)
 
-CI'da `benchmark` job'ı her push'ta koşup recall regresyonunu (eşik %45) ve
-temiz PR false-positive artışını yakalar.
+---
 
-## Katkı ve destek
-
-- **Lisans:** [MIT](LICENSE)
-- **Gizlilik:** [PRIVACY.md](PRIVACY.md)
-- **Destek / hata bildirimi:** [SUPPORT.md](SUPPORT.md) → [Issues](https://github.com/elifbarlik/PullRequestCodeReviewer/issues)
-
+Built as an individual software engineering project.
