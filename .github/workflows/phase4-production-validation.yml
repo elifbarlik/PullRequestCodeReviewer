@@ -1,9 +1,7 @@
 name: Phase 4 Production Validation
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 jobs:
   production-validation:
