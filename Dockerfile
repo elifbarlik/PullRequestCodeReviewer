@@ -16,6 +16,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
+# Güvenlik: uygulama root olarak çalışmasın (dışarıdan gelen kod Semgrep ile taranıyor).
+RUN useradd --create-home --uid 10001 app
+USER app
+ENV HOME=/home/app
+
 # Faz 4.4: Semgrep ruleset'lerini build sırasında indirip image katmanına göm.
 # Aksi halde ilk PR analizinde semgrep.dev'den indirme 5-30 sn sürer ve
 # GitHub webhook timeout'una takılabilir. ALLOWED_SEMGREP_CONFIGS'teki
@@ -28,11 +33,11 @@ RUN mkdir -p /tmp/warm && echo "x = 1" > /tmp/warm/warm.py && \
       --metrics=off --disable-version-check --quiet /tmp/warm || true && \
     rm -rf /tmp/warm
 
-COPY app/ ./app/
-COPY static/ ./static/
-COPY alembic.ini ./
-COPY alembic/ ./alembic/
-COPY logging.json ./
+COPY --chown=app:app app/ ./app/
+COPY --chown=app:app static/ ./static/
+COPY --chown=app:app alembic.ini ./
+COPY --chown=app:app alembic/ ./alembic/
+COPY --chown=app:app logging.json ./
 
 # Fail the image build if required runtime assets/migrations are missing.
 RUN test -f /app/static/index.html \
@@ -42,4 +47,4 @@ RUN test -f /app/static/index.html \
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --log-config /app/logging.json"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips=\"*\" --log-config /app/logging.json"]

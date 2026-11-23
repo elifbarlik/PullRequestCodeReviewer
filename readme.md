@@ -137,8 +137,38 @@ The `/local-review` endpoint accepts a diff directly and does not run the full S
 Run the automated test suite:
 
 ```bash
-pip install -r requirements.txt
 pip install -r requirements-dev.txt
+uvicorn app.main:app --reload
+```
+
+Webhook'ları yerelde test etmek için:
+
+```bash
+python scripts/smee_proxy.py https://smee.io/<kanalınız>   # webhook tüneli
+python scripts/get_installation_id.py                       # kurulu installation'ları listele
+```
+
+## API Endpoint'leri
+
+| Endpoint | Açıklama |
+|----------|----------|
+| `GET /health` | Sağlık kontrolü |
+| `POST /webhook` | GitHub App webhook alıcısı — imza zorunlu; `pull_request` analizi arka plana atılıp hemen `202` döner (GitHub 10 sn timeout'una takılmaz), `X-GitHub-Delivery` ile mükerrer retry atlanır |
+| `POST /local-review` | **Kimlik doğrulama gerekir** (`X-Admin-Token` veya GitHub oturumu). Diff'i doğrudan gönderip analiz ettirme — Semgrep çalıştırılamaz (gerçek dosya erişimi yok), LLM-only güvenlik incelemesine düşer |
+| `GET /metrics` | **GitHub oturumu gerekir** — yalnızca kullanıcının kendi installation'larının maliyet/performans metrikleri |
+| `GET /stats` | JSON parser başarı oranı + (DB açıksa) kurulum/analiz sayaçları |
+| `GET/PUT /installations/{id}/settings` | Installation bazlı Semgrep ayarları (Faz 2c) — DB açıksa |
+
+```bash
+curl -X POST http://localhost:8000/local-review \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-Token: $ADMIN_SECRET" \
+  -d '{"diff_text": "--- a/x.py\n+++ b/x.py\n...", "review_types": ["short_summary", "security"]}'
+```
+
+## Test
+
+```bash
 pytest tests/ -v
 ```
 
