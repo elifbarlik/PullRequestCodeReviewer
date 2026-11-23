@@ -464,6 +464,36 @@ def get_installation_settings(installation_id: int) -> Dict[str, Any]:
         return dict(DEFAULT_INSTALLATION_SETTINGS)
 
 
+def get_installation_details(installation_ids: Optional[List[int]] = None) -> Dict[str, Dict[str, Any]]:
+    """Return display metadata for installations visible to the authenticated user."""
+    if not installation_ids:
+        return {}
+    if not db_enabled():
+        return {}
+
+    try:
+        from sqlalchemy import select
+        from app.models import Installation
+
+        ids = [int(x) for x in installation_ids]
+        with get_session() as session:
+            rows = session.scalars(
+                select(Installation).where(Installation.id.in_(ids))
+            ).all()
+
+        return {
+            str(row.id): {
+                "id": int(row.id),
+                "login": row.account_login or f"Installation {row.id}",
+                "type": row.account_type or "unknown",
+            }
+            for row in rows
+        }
+    except Exception as e:
+        logger.error(f"⚠️ get_installation_details başarısız: {e}")
+        return {}
+
+
 def set_installation_settings(
     installation_id: int,
     enabled: Optional[bool] = None,
@@ -540,7 +570,7 @@ def check_rate_limit(installation_id: int, limit_per_hour: int = 50) -> bool:
         return True
 
 
-def get_detailed_metrics() -> Optional[Dict[str, Any]]:
+def get_detailed_metrics(installation_ids: Optional[List[int]] = None) -> Optional[Dict[str, Any]]:
     """Operational and cost metrics for the dashboard/metrics endpoint."""
     if not db_enabled():
         return None
@@ -548,6 +578,20 @@ def get_detailed_metrics() -> Optional[Dict[str, Any]]:
         from datetime import datetime, timedelta, timezone
         from sqlalchemy import func, select
         from app.models import Finding, UsageLog
+
+        if installation_ids is not None:
+            installation_ids = [int(x) for x in installation_ids]
+        if installation_ids == []:
+            return {
+                "reviews_last_24h": 0, "reviews_last_7d": 0,
+                "avg_duration_ms_24h": 0.0, "p50_duration_ms_24h": 0.0,
+                "p95_duration_ms_24h": 0.0,
+                "avg_timing_ms_24h": {"github": 0.0, "semgrep_and_summary": 0.0, "gemini_detail": 0.0},
+                "semgrep_unavailable_rate_pct_24h": 0.0, "findings_last_24h": 0,
+                "gemini_cost_usd_month": 0.0, "gemini_input_tokens_month": 0,
+                "gemini_output_tokens_month": 0, "llm_calls_month": 0,
+                "llm_cache_hits_month": 0, "llm_cache_hit_rate_pct_month": 0.0,
+            }
 
         now = datetime.now(timezone.utc)
         day_ago = now - timedelta(hours=24)

@@ -1,15 +1,22 @@
-# See https://fly.io/docs/app-guides/continuous-deployment-with-github-actions/
-
+# Deployment is intentionally manual to prevent accidental hosted-service charges.
 name: Fly Deploy
+
 on:
-  push:
-    branches:
-      - main
-      - master
+  workflow_dispatch:
+    inputs:
+      confirm_deploy:
+        description: "Choose yes only after confirming the Fly.io app and billing are active."
+        required: true
+        type: choice
+        options:
+          - no
+          - yes
+        default: no
 
 jobs:
   deploy:
     name: Deploy app
+    if: ${{ inputs.confirm_deploy == 'yes' }}
     runs-on: ubuntu-latest
     concurrency: deploy-group
 
