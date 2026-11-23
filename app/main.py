@@ -424,6 +424,14 @@ def _verify_admin_token(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Geçersiz admin token")
 
 
+def _require_admin_or_user(request: Request) -> None:
+    """Geçerli bir admin token'ı VEYA GitHub oturumu iste (Gemini kotasını korur)."""
+    if request.headers.get("X-Admin-Token"):
+        _verify_admin_token(request)
+        return
+    require_user(request)
+
+
 @app.post("/admin/logging-test")
 async def admin_logging_test(request: Request):
     """Emit one authenticated structured-log smoke-test record."""
@@ -531,7 +539,8 @@ async def update_installation_settings(
 @app.post("/local-review", response_model=ReviewResponse)
 @limiter.limit("10/hour")
 async def local_review(request: Request, body: DiffRequest):
-    """Doğrudan gönderilen diff'i analiz eder (webhook gerektirmez)."""
+    """Doğrudan gönderilen diff'i analiz eder (webhook gerektirmez). Kimlik doğrulama gerekir."""
+    _require_admin_or_user(request)
 
     if not body.diff_text or len(body.diff_text.strip()) == 0:
         raise HTTPException(status_code=400, detail="diff_text boş olamaz")
@@ -551,8 +560,8 @@ async def local_review(request: Request, body: DiffRequest):
         result = review_diff(diff_text=diff_to_analyze, review_types=review_types)
         ParseStatistics.record_attempt(result["status"] == "success")
     except Exception as e:
-        logger.error(f"Review hatası: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Review hatası: {str(e)}")
+        logger.exception("Review hatası")
+        raise HTTPException(status_code=500, detail="Review sırasında bir hata oluştu")
 
     return ReviewResponse(
         status=result["status"],
@@ -931,7 +940,9 @@ async def _run_pr_review(
 # -------------------------------------------------------------------
 
 @app.get("/metrics")
-async def metrics():
+async def metrics(request: Request):
+    """Tüm müşterilerin toplu maliyet/kullanım verisini içerir — yalnızca admin."""
+    _verify_admin_token(request)
     usage = get_detailed_metrics()
     return {
         "parser_success_rate_pct": round(ParseStatistics.get_success_rate(), 1),
@@ -1126,7 +1137,7 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
         logger.error(f"❌ Webhook hatası: {str(e)}")
         if sentry_sdk is not None:
             sentry_sdk.capture_exception(e)
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": "Webhook işlenirken bir hata oluştu"}
 
 
 # -------------------------------------------------------------------
